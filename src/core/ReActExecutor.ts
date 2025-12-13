@@ -121,10 +121,13 @@ export class ReActExecutor {
 
     // 主 ReAct 循环
     for (let iteration = 1; iteration <= this.config.maxIterations; iteration++) {
+      // 为本次迭代生成唯一的 thoughtId
+      const iterationId = `thought_${Date.now()}_${iteration}`;
+      
       try {
         if (this.config.streaming) {
           // === 流式模式 ===
-          const result = await this.streamIteration(llmWithTools, messages, tools, onMessage);
+          const result = await this.streamIteration(llmWithTools, messages, tools, onMessage, iterationId);
           
           if (result.isFinalAnswer) {
             return result.content;
@@ -215,7 +218,8 @@ export class ReActExecutor {
     llm: ReturnType<ChatOpenAI['bindTools']>,
     messages: BaseMessage[],
     tools: Tool[],
-    onMessage: ReActInput['onMessage']
+    onMessage: ReActInput['onMessage'],
+    iterationId: string  // 每次迭代的唯一 ID
   ): Promise<{ isFinalAnswer: boolean; content: string }> {
     const stream = await llm.stream(messages);
 
@@ -231,9 +235,10 @@ export class ReActExecutor {
         const text = typeof chunk.content === 'string' ? chunk.content : '';
         if (text) {
           accumulatedContent += text;
-          // 实时推送 thought
+          // 实时推送 thought，附带 thoughtId
           await this.emitEvent(onMessage, {
             type: 'stream',
+            thoughtId: iterationId,
             chunk: text,
             isThought: true,
           });

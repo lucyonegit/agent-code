@@ -89,6 +89,8 @@ export interface ErrorEvent {
  */
 export interface StreamEvent {
   type: 'stream';
+  /** 本次迭代的唯一标识，用于 UI 合并同一迭代的 thought */
+  thoughtId: string;
   /** 增量内容 */
   chunk: string;
   /** 是否是思考内容的流式输出 */
