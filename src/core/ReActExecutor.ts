@@ -7,8 +7,10 @@
  * - 事件驱动：通过 onMessage 回调进行通信
  * - 干净的流式输出：thought 通过 content 流式输出，action 通过 tool_calls 累积
  * - 多模型支持：支持 OpenAI、通义千问和 OpenAI 兼容端点
+ * - 使用 give_final_answer 工具显式给出最终答案
  */
 
+import { z } from 'zod';
 import { ChatOpenAI } from '@langchain/openai';
 import { HumanMessage, SystemMessage, AIMessage, ToolMessage, type BaseMessage } from '@langchain/core/messages';
 import { mergeToolCalls, toLangChainToolCalls, type AccumulatedToolCall, type ToolCallChunk } from './utils/streamHelper.js';
@@ -22,6 +24,24 @@ import {
 } from '../types/index.js';
 
 /**
+ * 内置的 give_final_answer 工具名称
+ */
+const FINAL_ANSWER_TOOL_NAME = 'give_final_answer';
+
+/**
+ * 内置的 give_final_answer 工具定义
+ * 用于让 LLM 显式地给出最终答案
+ */
+const FINAL_ANSWER_TOOL: Tool = {
+  name: FINAL_ANSWER_TOOL_NAME,
+  description: '当你完成所有思考和推理后，调用此函数给出最终答案。只在你确定答案时调用。',
+  parameters: z.object({
+    answer: z.string().describe('最终答案的完整内容'),
+  }),
+  execute: async () => '', // 这个工具不会真正执行，只用于提取答案
+};
+
+/**
  * ReAct agent 的默认系统提示词
  * 设计为让 LLM 在 content 中输出思考，在 tool_call 中输出动作
  */
@@ -29,14 +49,14 @@ const DEFAULT_SYSTEM_PROMPT = `你是一个有帮助的 AI 助手，使用 ReAct
 
 工作流程：
 1. 首先，在回复内容中写下你的思考过程（这部分会流式输出给用户）
-2. 然后，如果需要使用工具，调用相应的工具
-3. 如果你已经有了最终答案，直接在回复内容中给出，不需要调用工具
+2. 然后，如果需要使用工具获取信息，调用相应的工具
+3. 当你有了最终答案，必须调用 give_final_answer 工具来给出答案
 
 重要提示：
 - 先思考，后行动
 - 思考过程写在回复内容中
-- 使用工具时调用相应的 function
-- 最终答案直接写在回复内容中，不需要调用任何工具`;
+- 需要使用工具时调用相应的 function
+- 最终答案必须通过调用 give_final_answer 工具来给出，不要直接在回复中给出最终答案`;
 
 /**
  * ReActExecutor - 核心 ReAct 循环引擎
@@ -95,8 +115,11 @@ export class ReActExecutor {
     // 创建 LLM 实例
     const llm = this.createLLM();
     
+    // 添加内置的 give_final_answer 工具
+    const allTools = [...tools, FINAL_ANSWER_TOOL];
+    
     // 转换为 LangChain 工具格式并绑定
-    const langChainTools = toolsToLangChain(tools);
+    const langChainTools = toolsToLangChain(allTools);
     const llmWithTools = llm.bindTools(langChainTools, {
       tool_choice: 'auto',  // 让 LLM 自己决定是否使用工具
     });
@@ -152,6 +175,22 @@ export class ReActExecutor {
           
           // 检查是否有工具调用
           if (response.tool_calls && response.tool_calls.length > 0) {
+            // 检查是否调用了 give_final_answer 工具
+            const finalAnswerCall = response.tool_calls.find(call => call.name === FINAL_ANSWER_TOOL_NAME);
+            
+            if (finalAnswerCall) {
+              // 提取最终答案
+              const answer = (finalAnswerCall.args as { answer?: string }).answer || content;
+              
+              // 发出 final_answer 事件
+              await this.emitEvent(onMessage, {
+                type: 'final_answer',
+                content: answer,
+              });
+              return answer;
+            }
+            
+            // 处理普通工具调用
             for (const call of response.tool_calls) {
               await this.emitEvent(onMessage, {
                 type: 'action',
@@ -184,14 +223,8 @@ export class ReActExecutor {
               
               iterationHistory.push(`动作: ${call.name}\n观察: ${observation}`);
             }
-          } else {
-            // 没有工具调用 = 最终答案
-            await this.emitEvent(onMessage, {
-              type: 'final_answer',
-              content,
-            });
-            return content;
           }
+          // 没有工具调用 - 继续下一轮迭代让 LLM 调用 give_final_answer
         }
       } catch (error) {
         const errorMessage = error instanceof Error ? error.message : '未知错误';
@@ -275,6 +308,23 @@ export class ReActExecutor {
 
     // 处理 Action
     if (accumulatedToolCalls.length > 0) {
+      // 检查是否调用了 give_final_answer 工具
+      const finalAnswerCall = toolCalls.find(call => call.name === FINAL_ANSWER_TOOL_NAME);
+      
+      if (finalAnswerCall) {
+        // 提取最终答案
+        const answer = (finalAnswerCall.args as { answer?: string }).answer || accumulatedContent;
+        
+        // 发出 final_answer 事件
+        await this.emitEvent(onMessage, {
+          type: 'final_answer',
+          content: answer,
+        });
+        
+        return { isFinalAnswer: true, content: answer };
+      }
+      
+      // 处理普通工具调用
       for (const call of toolCalls) {
         // 发出 action 事件
         await this.emitEvent(onMessage, {
@@ -314,12 +364,9 @@ export class ReActExecutor {
 
       return { isFinalAnswer: false, content: accumulatedContent };
     } else {
-      // 没有 tool_calls = 最终答案
-      await this.emitEvent(onMessage, {
-        type: 'final_answer',
-        content: accumulatedContent,
-      });
-      return { isFinalAnswer: true, content: accumulatedContent };
+      // 没有 tool_calls - 继续下一轮迭代让 LLM 调用 give_final_answer
+      // 或者 LLM 可能还需要思考
+      return { isFinalAnswer: false, content: accumulatedContent };
     }
   }
 
