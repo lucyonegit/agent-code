@@ -128,7 +128,6 @@ export class PlannerExecutor {
     try {
       // 步骤 1：生成初始计划
       let plan = await this.generatePlan(goal, tools);
-      await onPlanUpdate?.(plan);
 
       // 步骤 2：执行计划步骤
       let rePlanAttempts = 0;
