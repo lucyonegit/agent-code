@@ -8,14 +8,12 @@
  * 关键特性：
  * - 基于执行结果的动态重规划
  * - 带上下文传递的逐步执行
- * - 计划生成使用结构化输出
+ * - 计划生成使用 tool call 实现结构化输出
  * - 多模型支持：OpenAI、通义千问和 OpenAI 兼容端点
  */
 
 import { ChatOpenAI } from '@langchain/openai';
-import { ChatAlibabaTongyi } from '@langchain/community/chat_models/alibaba_tongyi';
 import { HumanMessage, SystemMessage } from '@langchain/core/messages';
-import type { BaseChatModel } from '@langchain/core/language_models/chat_models';
 import { z } from 'zod';
 import { ReActExecutor } from './ReActExecutor.js';
 import {
@@ -155,6 +153,7 @@ export class PlannerExecutor {
           maxIterations: this.config.maxIterationsPerStep,
           apiKey: this.config.apiKey,
           baseUrl: this.config.baseUrl,
+          streaming:true
         });
 
         // 执行步骤
@@ -231,18 +230,41 @@ export class PlannerExecutor {
 
   /**
    * 为给定目标生成初始计划
+   * 使用 tool call 方式实现结构化输出
    */
   private async generatePlan(goal: string, tools: Tool[]): Promise<Plan> {
     const llm = this.createLLM(this.config.plannerModel);
-    const structuredLLM = llm.withStructuredOutput(PlanSchema);
+    
+    // 定义 generate_plan 工具，用于获取结构化的计划输出
+    const generatePlanTool = {
+      name: 'generate_plan',
+      description: '生成一个分步执行计划。你必须调用此工具来返回你的计划。',
+      schema: PlanSchema,
+    };
+    
+    // 绑定工具并强制使用
+    const llmWithTool = llm.bindTools([generatePlanTool], {
+      tool_choice: { type: 'function', function: { name: 'generate_plan' } },
+    });
+    
     const toolDescriptions = tools.map(t => `- ${t.name}: ${t.description}`).join('\n');
 
-    const response = await structuredLLM.invoke([
+    const response = await llmWithTool.invoke([
       new SystemMessage(PLANNER_SYSTEM_PROMPT),
-      new HumanMessage(`目标: ${goal}\n\n可用工具:\n${toolDescriptions}\n\n创建一个分步计划来实现这个目标。`),
+      new HumanMessage(`目标: ${goal}\n\n可用工具:\n${toolDescriptions}\n\n创建一个分步计划来实现这个目标。你必须调用 generate_plan 工具来返回你的计划。`),
     ]);
 
-    const planData = response as z.infer<typeof PlanSchema>;
+    // 从 tool_calls 中提取计划数据
+    if (!response.tool_calls || response.tool_calls.length === 0) {
+      throw new Error('LLM 未返回计划工具调用');
+    }
+
+    const toolCall = response.tool_calls[0];
+    if (toolCall.name !== 'generate_plan') {
+      throw new Error(`意外的工具调用: ${toolCall.name}`);
+    }
+
+    const planData = toolCall.args as z.infer<typeof PlanSchema>;
 
     return {
       goal: planData.goal,
@@ -348,31 +370,34 @@ ${pendingSteps.map(s => `- ${s.id}: ${s.description}`).join('\n')}
   /**
    * 创建 LLM 实例
    * 支持 OpenAI、通义千问和 OpenAI 兼容端点
+   * 统一使用 ChatOpenAI 以支持 bindTools
    */
-  private createLLM(model: string): BaseChatModel {
+  private createLLM(model: string): ChatOpenAI {
+    const baseConfig = {
+      model,
+      temperature: 0,
+      apiKey: this.config.apiKey,
+    };
+
     switch (this.config.provider) {
       case 'tongyi':
-        return new ChatAlibabaTongyi({
-          model,
-          temperature: 0,
-          alibabaApiKey: this.config.apiKey,
+        // 使用通义千问的 OpenAI 兼容端点
+        return new ChatOpenAI({
+          ...baseConfig,
+          configuration: {
+            baseURL: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+          },
         });
       
       case 'openai-compatible':
         return new ChatOpenAI({
-          model,
-          temperature: 0,
-          apiKey: this.config.apiKey,
+          ...baseConfig,
           configuration: { baseURL: this.config.baseUrl },
         });
       
       case 'openai':
       default:
-        return new ChatOpenAI({
-          model,
-          temperature: 0,
-          apiKey: this.config.apiKey,
-        });
+        return new ChatOpenAI(baseConfig);
     }
   }
 }

@@ -101,6 +101,12 @@ ${args.sections.map((s: { heading: string; content: string }) => `## ${s.heading
 
 function handleEvent(event: ReActEvent): void {
   switch (event.type) {
+     case 'stream':
+      // 流式输出：直接打印增量内容（不换行）
+      if (event.isThought) {
+        process.stdout.write(event.chunk);
+      }
+      break;
     case 'thought':
       console.log(`  💭 ${event.content}`);
       break;
@@ -142,12 +148,12 @@ async function main() {
   console.log('='.repeat(60));
 
   const planner = new PlannerExecutor({
-    plannerModel: 'gpt-4',
-    executorModel: 'gpt-3.5-turbo',
+    provider:'tongyi',
+    plannerModel: 'qwen-max',
+    executorModel: 'qwen-max',
     maxIterationsPerStep: 5,
     maxRePlanAttempts: 2,
-    // apiKey: process.env.OPENAI_API_KEY,
-    // baseUrl: 'https://your-api-endpoint',
+    apiKey: 'sk-2da524e57ee64485ab4208430ab35f4d',
   });
 
   const allTools = [searchTool, analyzeTool, summarizeTool, reportTool];
@@ -161,14 +167,6 @@ async function main() {
       onMessage: handleEvent,
       onPlanUpdate: handlePlanUpdate,
     });
-
-    console.log('\n' + '='.repeat(60));
-    console.log('📊 最终结果');
-    console.log('='.repeat(60));
-    console.log(`成功: ${result.success}`);
-    console.log('\n响应:');
-    console.log(result.response);
-    console.log('\n已完成步骤:', result.plan.steps.filter(s => s.status === 'done').length);
   } catch (error) {
     console.error('规划器执行失败:', error);
   }

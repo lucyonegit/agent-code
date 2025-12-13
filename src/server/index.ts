@@ -1,24 +1,25 @@
 /**
- * SSE Server - 通过 Server-Sent Events 暴露 ReActExecutor 接口
+ * SSE Server - 通过 Server-Sent Events 暴露 ReActExecutor 和 PlannerExecutor 接口
  * 
  * 使用方法：
  * 1. 启动服务器: npx tsx src/server/index.ts
- * 2. 发送请求: POST /api/react 
+ * 2. 发送请求: POST /api/react 或 POST /api/planner
  *    Body: { "input": "你的问题", "tools": ["tool1", "tool2"] }
  * 3. 接收 SSE 流式响应
  */
 
 import http from 'http';
 import { ReActExecutor } from '../core/ReActExecutor.js';
-import { type Tool, type ReActEvent } from '../types/index.js';
+import { PlannerExecutor } from '../core/PlannerExecutor.js';
+import { type Tool, type ReActEvent, type Plan } from '../types/index.js';
 import { z } from 'zod';
 
 // ============================================================================
 // 配置
 // ============================================================================
 
-const PORT = process.env.PORT || 3000;
-const API_KEY = process.env.DASHSCOPE_API_KEY || '';
+const PORT = 3000;
+const API_KEY = 'sk-2da524e57ee64485ab4208430ab35f4d';
 
 // ============================================================================
 // 预定义工具（示例）
@@ -182,6 +183,75 @@ async function handleReactRequest(
   }
 }
 
+/**
+ * 处理 Planner 请求
+ */
+async function handlePlannerRequest(
+  req: http.IncomingMessage,
+  res: http.ServerResponse
+): Promise<void> {
+  // 设置 SSE 头
+  setSSEHeaders(res);
+
+  try {
+    // 解析请求体
+    const body = await parseBody(req);
+    const { goal, tools: toolNames = ['get_weather', 'calculator', 'web_search'] } = body;
+
+    if (!goal) {
+      sendSSE(res, 'error', { message: '缺少 goal 参数' });
+      res.end();
+      return;
+    }
+
+    // 获取请求的工具
+    const tools: Tool[] = toolNames
+      .filter((name: string) => AVAILABLE_TOOLS[name])
+      .map((name: string) => AVAILABLE_TOOLS[name]);
+
+    if (tools.length === 0) {
+      sendSSE(res, 'error', { message: '没有可用的工具' });
+      res.end();
+      return;
+    }
+
+    // 创建 PlannerExecutor
+    const planner = new PlannerExecutor({
+      plannerModel: 'qwen-max',
+      executorModel: 'qwen-max',
+      provider: 'tongyi',
+      maxIterationsPerStep: 10,
+      maxRePlanAttempts: 3,
+      apiKey: API_KEY,
+    });
+
+    // 执行并流式返回结果
+    const result = await planner.run({
+      goal,
+      tools,
+      onMessage: (event: ReActEvent) => {
+        sendSSE(res, event.type, event);
+      },
+      onPlanUpdate: (plan: Plan) => {
+        sendSSE(res, 'plan_update', { type: 'plan_update', plan });
+      },
+    });
+
+    // 发送完成事件
+    sendSSE(res, 'planner_done', { 
+      type: 'planner_done',
+      success: result.success,
+      response: result.response,
+      plan: result.plan,
+    });
+    res.end();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : '未知错误';
+    sendSSE(res, 'error', { message });
+    res.end();
+  }
+}
+
 // ============================================================================
 // 服务器创建
 // ============================================================================
@@ -228,6 +298,12 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  // Planner 接口
+  if (method === 'POST' && url === '/api/planner') {
+    await handlePlannerRequest(req, res);
+    return;
+  }
+
   // 404
   res.writeHead(404, { 'Content-Type': 'application/json' });
   res.end(JSON.stringify({ error: 'Not Found' }));
@@ -235,15 +311,16 @@ const server = http.createServer(async (req, res) => {
 
 // 启动服务器
 server.listen(PORT, () => {
-  console.log(`🚀 ReAct SSE Server running at http://localhost:${PORT}`);
+  console.log(`🚀 Agent SSE Server running at http://localhost:${PORT}`);
   console.log('');
   console.log('可用接口:');
-  console.log(`  GET  http://localhost:${PORT}/health      - 健康检查`);
-  console.log(`  GET  http://localhost:${PORT}/api/tools   - 获取可用工具`);
-  console.log(`  POST http://localhost:${PORT}/api/react   - ReAct 执行 (SSE)`);
+  console.log(`  GET  http://localhost:${PORT}/health       - 健康检查`);
+  console.log(`  GET  http://localhost:${PORT}/api/tools    - 获取可用工具`);
+  console.log(`  POST http://localhost:${PORT}/api/react    - ReAct 执行 (SSE)`);
+  console.log(`  POST http://localhost:${PORT}/api/planner  - Planner 执行 (SSE)`);
   console.log('');
   console.log('示例请求:');
-  console.log(`  curl -X POST http://localhost:${PORT}/api/react \\`);
+  console.log(`  curl -X POST http://localhost:${PORT}/api/planner \\`);
   console.log('    -H "Content-Type: application/json" \\');
-  console.log('    -d \'{"input": "北京天气怎么样？"}\'');
+  console.log('    -d \'{"goal": "查询北京和上海的天气并比较"}\'');
 });

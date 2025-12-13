@@ -258,12 +258,12 @@ export class ReActExecutor {
     // === 流结束后处理 ===
     
     // 发出完整的 thought 事件
-    if (accumulatedContent) {
-      await this.emitEvent(onMessage, {
-        type: 'thought',
-        content: accumulatedContent,
-      });
-    }
+    // if (accumulatedContent) {
+    //   await this.emitEvent(onMessage, {
+    //     type: 'thought',
+    //     content: accumulatedContent,
+    //   });
+    // }
 
     // 构建 AI 消息并添加到历史
     const toolCalls = toLangChainToolCalls(accumulatedToolCalls);
