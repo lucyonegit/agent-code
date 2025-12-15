@@ -152,14 +152,15 @@ export class PlannerExecutor {
           maxIterations: this.config.maxIterationsPerStep,
           apiKey: this.config.apiKey,
           baseUrl: this.config.baseUrl,
-          streaming:true
+          streaming: true,
+          shortGreeting:false,
         });
 
         // 执行步骤
-        await onMessage?.({
-          type: 'thought',
-          content: `正在执行步骤 ${currentStep.id}: ${currentStep.description}`,
-        });
+        // await onMessage?.({
+        //   type: 'thought',
+        //   content: `正在执行步骤 ${currentStep.id}: ${currentStep.description}`,
+        // });
 
         const stepResult = await executor.run({
           input: currentStep.description,

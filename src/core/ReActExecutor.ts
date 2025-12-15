@@ -60,26 +60,6 @@ const DEFAULT_SYSTEM_PROMPT = `你是一个有帮助的 AI 助手，使用 ReAct
 
 /**
  * ReActExecutor - 核心 ReAct 循环引擎
- * 
- * @example
- * ```typescript
- * const executor = new ReActExecutor({
- *   model: 'qwen-plus',
- *   provider: 'tongyi',
- *   streaming: true,
- *   apiKey: process.env.DASHSCOPE_API_KEY
- * });
- * 
- * const result = await executor.run({
- *   input: '北京现在的天气怎么样？',
- *   tools: [weatherTool],
- *   onMessage: (event) => {
- *     if (event.type === 'stream') {
- *       process.stdout.write(event.chunk);
- *     }
- *   }
- * });
- * ```
  */
 export class ReActExecutor {
   private config: {
@@ -87,6 +67,7 @@ export class ReActExecutor {
     provider: LLMProvider;
     maxIterations: number;
     systemPrompt: string;
+    shortGreeting: boolean;
     temperature: number;
     streaming: boolean;
     apiKey?: string;
@@ -99,6 +80,7 @@ export class ReActExecutor {
       provider: config.provider ?? 'openai',
       maxIterations: config.maxIterations ?? 10,
       systemPrompt: config.systemPrompt ?? DEFAULT_SYSTEM_PROMPT,
+      shortGreeting: config.shortGreeting ?? false,
       temperature: config.temperature ?? 0,
       streaming: config.streaming ?? false,
       apiKey: config.apiKey,
@@ -141,6 +123,10 @@ export class ReActExecutor {
 
     // 跟踪迭代历史
     const iterationHistory: string[] = [];
+
+    // 发送友好的初始提示（使用 LLM 流式生成）
+    const greetingId = `greeting_${Date.now()}`;
+    await this.streamGreeting(llm, userInput, onMessage, greetingId);
 
     // 主 ReAct 循环
     for (let iteration = 1; iteration <= this.config.maxIterations; iteration++) {
@@ -421,6 +407,43 @@ export class ReActExecutor {
 
       return `- ${tool.name}: ${tool.description}\n  参数:\n${paramsDescription}`;
     }).join('\n\n');
+  }
+
+  /**
+   * 使用 LLM 流式生成友好的初始提示
+   */
+  private async streamGreeting(
+    llm: ChatOpenAI,
+    userInput: string,
+    onMessage: ReActInput['onMessage'],
+    greetingId: string
+  ): Promise<void> {
+    const greetingPrompt = `用户说："${userInput}"
+
+请用一句话友好地确认你将帮助用户完成这个任务。要求：
+1. 简洁明了，不超过30个字
+2. 显示你理解了用户的意图
+3. 以"好的"或"没问题"开头
+4. 以"请稍等..."结尾
+
+只回复这一句话，不要其他内容。`;
+
+    const stream = await llm.stream([
+      new SystemMessage('你是一个友好的助手，负责生成简短的确认回复。'),
+      new HumanMessage(greetingPrompt),
+    ]);
+
+    for await (const chunk of stream) {
+      const text = typeof chunk.content === 'string' ? chunk.content : '';
+      if (text) {
+        await this.emitEvent(onMessage, {
+          type: 'stream',
+          thoughtId: greetingId,
+          chunk: text,
+          isThought: true,
+        });
+      }
+    }
   }
 
   /**

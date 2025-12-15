@@ -149,6 +149,9 @@ export interface ReActConfig {
   
   /** 是否启用流式输出。默认：false */
   streaming?: boolean;
+
+  /** 是否开启简洁问候。默认：false */
+  shortGreeting?: boolean
 }
 
 /**
