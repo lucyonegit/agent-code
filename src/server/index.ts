@@ -238,7 +238,7 @@ async function handlePlannerRequest(
     });
 
     // 发送完成事件
-    sendSSE(res, 'planner_done', { 
+    sendSSE(res, 'planner_done', {
       type: 'planner_done',
       success: result.success,
       response: result.response,
@@ -279,7 +279,7 @@ const server = http.createServer(async (req, res) => {
 
   // 获取可用工具列表
   if (method === 'GET' && url === '/api/tools') {
-    res.writeHead(200, { 
+    res.writeHead(200, {
       'Content-Type': 'application/json',
       'Access-Control-Allow-Origin': '*',
     });

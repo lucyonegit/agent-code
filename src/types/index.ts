@@ -23,13 +23,13 @@ export type ToolParameterSchema = z.ZodObject<any>;
 export interface Tool {
   /** 工具的唯一标识符 */
   name: string;
-  
+
   /** 工具功能的可读描述 */
   description: string;
-  
+
   /** 定义工具参数的 Zod schema */
   parameters: ToolParameterSchema;
-  
+
   /** 
    * 使用给定参数执行工具
    * @param args - 符合参数 schema 的参数对象
@@ -100,10 +100,10 @@ export interface StreamEvent {
 /**
  * 所有可能的 ReAct 事件的联合类型
  */
-export type ReActEvent = 
-  | ThoughtEvent 
-  | ActionEvent 
-  | ObservationEvent 
+export type ReActEvent =
+  | ThoughtEvent
+  | ActionEvent
+  | ObservationEvent
   | FinalAnswerEvent
   | ErrorEvent
   | StreamEvent;
@@ -128,30 +128,36 @@ export type LLMProvider = 'openai' | 'tongyi' | 'openai-compatible';
 export interface ReActConfig {
   /** LLM 模型标识符（例如 'gpt-4', 'qwen-plus', 'qwen-turbo'）*/
   model: string;
-  
+
   /** LLM 提供商。默认：'openai' */
   provider?: LLMProvider;
-  
+
   /** 停止前的最大 ReAct 迭代次数。默认：10 */
   maxIterations?: number;
-  
+
   /** 可选的系统提示词，用于引导 agent 的行为 */
   systemPrompt?: string;
-  
+
   /** OpenAI API 密钥或兼容的 API 密钥 */
   apiKey?: string;
-  
+
   /** API 的基础 URL（用于 openai-compatible 模式）*/
   baseUrl?: string;
-  
+
   /** LLM 采样温度。默认：0 */
   temperature?: number;
-  
+
   /** 是否启用流式输出。默认：false */
   streaming?: boolean;
 
-  /** 是否开启简洁问候。默认：false */
-  shortGreeting?: boolean
+  /** 自定义用户消息模板 */
+  userMessageTemplate?: (input: string, toolDescriptions: string, context?: string) => string;
+
+  /** 
+   * 最终答案工具（可选）
+   * 如果提供，ReActExecutor 会自动将其添加到工具列表，并在系统提示词中添加使用说明
+   */
+  finalAnswerTool?: Tool;
 }
 
 /**
@@ -160,13 +166,13 @@ export interface ReActConfig {
 export interface ReActInput {
   /** 用户输入或任务描述 */
   input: string;
-  
+
   /** 可选的上下文信息（例如之前步骤的结果）*/
   context?: string;
-  
+
   /** 本次执行可用的工具列表 */
   tools: Tool[];
-  
+
   /** 执行过程中接收事件的可选回调 */
   onMessage?: ReActEventHandler;
 }
@@ -213,19 +219,19 @@ export type PlanStepStatus = 'pending' | 'in_progress' | 'done' | 'failed' | 'sk
 export interface PlanStep {
   /** 步骤的唯一标识符 */
   id: string;
-  
+
   /** 描述此步骤应完成的内容 */
   description: string;
-  
+
   /** 步骤的当前状态 */
   status: PlanStepStatus;
-  
+
   /** 此步骤可能需要的工具名称 */
   requiredTools?: string[];
-  
+
   /** 步骤执行的结果（完成后填充）*/
   result?: string;
-  
+
   /** 必须在此步骤之前完成的步骤 ID */
   dependencies?: string[];
 }
@@ -255,13 +261,13 @@ export const PlanSchema = z.object({
 export interface Plan {
   /** 要完成的总体目标 */
   goal: string;
-  
+
   /** 实现目标的有序步骤列表 */
   steps: PlanStep[];
-  
+
   /** 规划推理的说明 */
   reasoning: string;
-  
+
   /** 步骤执行的历史记录，用于上下文 */
   history: Array<{
     stepId: string;
@@ -276,24 +282,45 @@ export interface Plan {
 export interface PlannerConfig {
   /** 用于规划的 LLM 模型标识符 */
   plannerModel: string;
-  
+
   /** 用于步骤执行的 LLM 模型标识符 */
   executorModel: string;
-  
+
   /** LLM 提供商。默认：'openai' */
   provider?: LLMProvider;
-  
+
   /** ReActExecutor 中每个步骤的最大迭代次数 */
   maxIterationsPerStep?: number;
-  
+
   /** 最大重规划尝试次数 */
   maxRePlanAttempts?: number;
-  
+
   /** OpenAI/通义千问 API 密钥 */
   apiKey?: string;
-  
+
   /** API 的基础 URL（用于 openai-compatible 模式）*/
   baseUrl?: string;
+
+  /** 自定义规划器系统提示词 */
+  systemPrompt?: string;
+
+  /** 自定义重规划系统提示词 */
+  refinePrompt?: string;
+
+  /** 自定义最终汇总系统提示词 */
+  summaryPrompt?: string;
+
+  /** 自定义计划生成消息模板 */
+  planMessageTemplate?: (goal: string, toolDescriptions: string) => string;
+
+  /** 自定义重规划消息模板 */
+  refineMessageTemplate?: (plan: Plan, latestResult: string, tools: Tool[]) => string;
+
+  /** 自定义最终汇总消息模板 */
+  summaryMessageTemplate?: (plan: Plan) => string;
+
+  /** 自定义执行器配置（允许完全控制 ReActExecutor 创建） */
+  executorConfig?: Partial<ReActConfig>;
 }
 
 /**
@@ -302,13 +329,13 @@ export interface PlannerConfig {
 export interface PlannerInput {
   /** 用户的目标或目的 */
   goal: string;
-  
+
   /** 所有可用的工具 */
   tools: Tool[];
-  
+
   /** 接收事件的可选回调 */
   onMessage?: ReActEventHandler;
-  
+
   /** 计划更新时的专用回调 */
   onPlanUpdate?: (plan: Plan) => void | Promise<void>;
 }
@@ -319,10 +346,10 @@ export interface PlannerInput {
 export interface PlannerResult {
   /** 计划是否成功完成 */
   success: boolean;
-  
+
   /** 给用户的最终响应 */
   response: string;
-  
+
   /** 已执行的计划及所有结果 */
   plan: Plan;
 }

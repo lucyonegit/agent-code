@@ -7,11 +7,15 @@
  * - 事件驱动：通过 onMessage 回调进行通信
  * - 干净的流式输出：thought 通过 content 流式输出，action 通过 tool_calls 累积
  * - 多模型支持：支持 OpenAI、通义千问和 OpenAI 兼容端点
- * - 使用 give_final_answer 工具显式给出最终答案
+ * - 可选的最终答案工具：业务层传入，ReAct 内部拼装系统提示词
+ * 
+ * 这是一个业务无关的基础架构组件。
+ * 所有提示词和消息都可通过 ReActConfig 配置。
  */
 
 import { z } from 'zod';
 import { ChatOpenAI } from '@langchain/openai';
+import { createLLM } from './BaseLLM.js';
 import { HumanMessage, SystemMessage, AIMessage, ToolMessage, type BaseMessage } from '@langchain/core/messages';
 import { mergeToolCalls, toLangChainToolCalls, type AccumulatedToolCall, type ToolCallChunk } from './utils/streamHelper.js';
 import { toolsToLangChain } from './ToolRegistry.js';
@@ -24,39 +28,51 @@ import {
 } from '../types/index.js';
 
 /**
- * 内置的 give_final_answer 工具名称
+ * 默认 ReAct 系统提示词（导出供外部使用）
  */
-const FINAL_ANSWER_TOOL_NAME = 'give_final_answer';
-
-/**
- * 内置的 give_final_answer 工具定义
- * 用于让 LLM 显式地给出最终答案
- */
-const FINAL_ANSWER_TOOL: Tool = {
-  name: FINAL_ANSWER_TOOL_NAME,
-  description: '当你完成所有思考和推理后，调用此函数给出最终答案。只在你确定答案时调用。',
-  parameters: z.object({
-    answer: z.string().describe('最终答案的完整内容'),
-  }),
-  execute: async () => '', // 这个工具不会真正执行，只用于提取答案
-};
-
-/**
- * ReAct agent 的默认系统提示词
- * 设计为让 LLM 在 content 中输出思考，在 tool_call 中输出动作
- */
-const DEFAULT_SYSTEM_PROMPT = `你是一个有帮助的 AI 助手，使用 ReAct（推理 + 行动）方法来解决问题。
+export const DEFAULT_REACT_PROMPT = `你是一个有帮助的 AI 助手，使用 ReAct（推理 + 行动）方法来解决问题。
 
 工作流程：
 1. 首先，在回复内容中写下你的思考过程（这部分会流式输出给用户）
 2. 然后，如果需要使用工具获取信息，调用相应的工具
-3. 当你有了最终答案，必须调用 give_final_answer 工具来给出答案
+3. 根据工具返回的结果继续思考和行动
 
 重要提示：
 - 先思考，后行动
 - 思考过程写在回复内容中
-- 需要使用工具时调用相应的 function
-- 最终答案必须通过调用 give_final_answer 工具来给出，不要直接在回复中给出最终答案`;
+- 需要使用工具时调用相应的 function`;
+
+/**
+ * 默认最终答案工具（导出供外部使用）
+ */
+export const defaultFinalAnswerTool: Tool = {
+  name: 'give_final_answer',
+  description: '当你完成所有思考和推理后，调用此函数给出最终答案。只在你确定答案时调用。',
+  parameters: z.object({
+    answer: z.string().describe('最终答案的完整内容'),
+  }),
+  execute: async () => '',
+};
+
+/**
+ * 最终答案工具的系统提示词后缀模板
+ */
+const FINAL_ANSWER_PROMPT_SUFFIX = (toolName: string) => `
+
+特别注意：
+- 当你有了最终答案，必须调用 ${toolName} 工具来给出答案
+- 最终答案必须通过调用 ${toolName} 工具来给出，不要直接在回复中给出最终答案`;
+
+/**
+ * 默认用户消息模板（导出供外部使用）
+ */
+export const defaultUserMessageTemplate = (input: string, toolDescriptions: string, context?: string): string => {
+  let message = `任务: ${input}\n\n可用工具:\n${toolDescriptions}`;
+  if (context) {
+    message += `\n\n之前步骤的上下文:\n${context}`;
+  }
+  return message;
+};
 
 /**
  * ReActExecutor - 核心 ReAct 循环引擎
@@ -67,11 +83,12 @@ export class ReActExecutor {
     provider: LLMProvider;
     maxIterations: number;
     systemPrompt: string;
-    shortGreeting: boolean;
     temperature: number;
     streaming: boolean;
     apiKey?: string;
     baseUrl?: string;
+    userMessageTemplate: (input: string, toolDescriptions: string, context?: string) => string;
+    finalAnswerTool: Tool;
   };
 
   constructor(config: ReActConfig) {
@@ -79,12 +96,13 @@ export class ReActExecutor {
       model: config.model,
       provider: config.provider ?? 'openai',
       maxIterations: config.maxIterations ?? 10,
-      systemPrompt: config.systemPrompt ?? DEFAULT_SYSTEM_PROMPT,
-      shortGreeting: config.shortGreeting ?? false,
+      systemPrompt: config.systemPrompt ?? DEFAULT_REACT_PROMPT,
       temperature: config.temperature ?? 0,
       streaming: config.streaming ?? false,
       apiKey: config.apiKey,
       baseUrl: config.baseUrl,
+      userMessageTemplate: config.userMessageTemplate ?? defaultUserMessageTemplate,
+      finalAnswerTool: config.finalAnswerTool || defaultFinalAnswerTool,
     };
   }
 
@@ -93,62 +111,69 @@ export class ReActExecutor {
    */
   async run(input: ReActInput): Promise<string> {
     const { input: userInput, context, tools, onMessage } = input;
-    
-    // 创建 LLM 实例
-    const llm = this.createLLM();
-    
-    // 添加内置的 give_final_answer 工具
-    const allTools = [...tools, FINAL_ANSWER_TOOL];
-    
+
+    const llm = createLLM({
+      model: this.config.model,
+      provider: this.config.provider,
+      temperature: this.config.temperature,
+      apiKey: this.config.apiKey,
+      baseUrl: this.config.baseUrl,
+      streaming: this.config.streaming,
+    });
+
+    // 如果提供了最终答案工具，添加到工具列表
+    const allTools = this.config.finalAnswerTool
+      ? [...tools, this.config.finalAnswerTool]
+      : tools;
+
     // 转换为 LangChain 工具格式并绑定
     const langChainTools = toolsToLangChain(allTools);
     const llmWithTools = llm.bindTools(langChainTools, {
-      tool_choice: 'auto',  // 让 LLM 自己决定是否使用工具
+      tool_choice: 'auto',
     });
 
     // 构建提示词的工具描述
     const toolDescriptions = this.formatToolDescriptions(tools);
-    
+
+    // 构建系统提示词（如果有最终答案工具，添加使用说明）
+    let systemPrompt = this.config.systemPrompt;
+    if (this.config.finalAnswerTool) {
+      systemPrompt += FINAL_ANSWER_PROMPT_SUFFIX(this.config.finalAnswerTool.name);
+    }
+
     // 初始化对话历史
     const messages: BaseMessage[] = [
-      new SystemMessage(this.config.systemPrompt),
+      new SystemMessage(systemPrompt),
     ];
 
-    // 构建初始用户消息
-    let userMessage = `任务: ${userInput}\n\n可用工具:\n${toolDescriptions}`;
-    if (context) {
-      userMessage = `之前步骤的上下文:\n${context}\n\n${userMessage}`;
-    }
+    // 使用模板构建初始用户消息
+    const userMessage = this.config.userMessageTemplate(userInput, toolDescriptions, context);
     messages.push(new HumanMessage(userMessage));
 
     // 跟踪迭代历史
     const iterationHistory: string[] = [];
 
-    // 发送友好的初始提示（使用 LLM 流式生成）
-    const greetingId = `greeting_${Date.now()}`;
-    await this.streamGreeting(llm, userInput, onMessage, greetingId);
-
     // 主 ReAct 循环
     for (let iteration = 1; iteration <= this.config.maxIterations; iteration++) {
       // 为本次迭代生成唯一的 thoughtId
       const iterationId = `thought_${Date.now()}_${iteration}`;
-      
+
       try {
         if (this.config.streaming) {
           // === 流式模式 ===
           const result = await this.streamIteration(llmWithTools, messages, tools, onMessage, iterationId);
-          
+
           if (result.isFinalAnswer) {
             return result.content;
           }
-          
+
           // 继续下一轮迭代（工具结果已添加到 messages）
           iterationHistory.push(result.content);
         } else {
           // === 非流式模式 ===
           const response = await llmWithTools.invoke(messages);
           const content = typeof response.content === 'string' ? response.content : '';
-          
+
           // 发出思考事件
           if (content) {
             await this.emitEvent(onMessage, {
@@ -156,26 +181,30 @@ export class ReActExecutor {
               content,
             });
           }
-          
+
           messages.push(response);
-          
+
           // 检查是否有工具调用
           if (response.tool_calls && response.tool_calls.length > 0) {
-            // 检查是否调用了 give_final_answer 工具
-            const finalAnswerCall = response.tool_calls.find(call => call.name === FINAL_ANSWER_TOOL_NAME);
-            
-            if (finalAnswerCall) {
-              // 提取最终答案
-              const answer = (finalAnswerCall.args as { answer?: string }).answer || content;
-              
-              // 发出 final_answer 事件
-              await this.emitEvent(onMessage, {
-                type: 'final_answer',
-                content: answer,
-              });
-              return answer;
+            // 检查是否调用了最终答案工具
+            if (this.config.finalAnswerTool) {
+              const finalAnswerCall = response.tool_calls.find(
+                call => call.name === this.config.finalAnswerTool!.name
+              );
+
+              if (finalAnswerCall) {
+                // 提取最终答案
+                const answer = (finalAnswerCall.args as { answer?: string }).answer || content;
+
+                // 发出 final_answer 事件
+                await this.emitEvent(onMessage, {
+                  type: 'final_answer',
+                  content: answer,
+                });
+                return answer;
+              }
             }
-            
+
             // 处理普通工具调用
             for (const call of response.tool_calls) {
               await this.emitEvent(onMessage, {
@@ -183,11 +212,11 @@ export class ReActExecutor {
                 toolName: call.name,
                 args: call.args,
               });
-              
+
               // 执行工具
-              const tool = tools.find(t => t.name === call.name);
+              const tool = allTools.find(t => t.name === call.name);
               let observation: string;
-              
+
               if (!tool) {
                 observation = `工具 "${call.name}" 未找到`;
                 await this.emitEvent(onMessage, { type: 'error', message: observation });
@@ -199,18 +228,18 @@ export class ReActExecutor {
                   await this.emitEvent(onMessage, { type: 'error', message: observation });
                 }
               }
-              
+
               await this.emitEvent(onMessage, { type: 'observation', content: observation });
-              
+
               messages.push(new ToolMessage({
                 tool_call_id: call.id || 'call_id',
                 content: observation,
               }));
-              
+
               iterationHistory.push(`动作: ${call.name}\n观察: ${observation}`);
             }
           }
-          // 没有工具调用 - 继续下一轮迭代让 LLM 调用 give_final_answer
+          // 没有工具调用 - 继续下一轮迭代
         }
       } catch (error) {
         const errorMessage = error instanceof Error ? error.message : '未知错误';
@@ -238,7 +267,7 @@ export class ReActExecutor {
     messages: BaseMessage[],
     tools: Tool[],
     onMessage: ReActInput['onMessage'],
-    iterationId: string  // 每次迭代的唯一 ID
+    iterationId: string
   ): Promise<{ isFinalAnswer: boolean; content: string }> {
     const stream = await llm.stream(messages);
 
@@ -246,10 +275,14 @@ export class ReActExecutor {
     let accumulatedContent = '';
     let accumulatedToolCalls: AccumulatedToolCall[] = [];
 
+    // 所有工具（包括最终答案工具）
+    const allTools = this.config.finalAnswerTool
+      ? [...tools, this.config.finalAnswerTool]
+      : tools;
+
     // === 流式处理循环 ===
     for await (const chunk of stream) {
-      // Phase 1: Thought 流式输出
-      // content 部分 = 思考过程
+      // 阶段 1: Thought 流式输出
       if (chunk.content) {
         const text = typeof chunk.content === 'string' ? chunk.content : '';
         if (text) {
@@ -264,8 +297,7 @@ export class ReActExecutor {
         }
       }
 
-      // Phase 2: Action 累积
-      // tool_call_chunks 部分 = 动作信息（分片到达）
+      // 阶段 2: Action 累积
       if (chunk.tool_call_chunks && chunk.tool_call_chunks.length > 0) {
         accumulatedToolCalls = mergeToolCalls(
           accumulatedToolCalls,
@@ -275,14 +307,6 @@ export class ReActExecutor {
     }
 
     // === 流结束后处理 ===
-    
-    // 发出完整的 thought 事件
-    // if (accumulatedContent) {
-    //   await this.emitEvent(onMessage, {
-    //     type: 'thought',
-    //     content: accumulatedContent,
-    //   });
-    // }
 
     // 构建 AI 消息并添加到历史
     const toolCalls = toLangChainToolCalls(accumulatedToolCalls);
@@ -294,22 +318,26 @@ export class ReActExecutor {
 
     // 处理 Action
     if (accumulatedToolCalls.length > 0) {
-      // 检查是否调用了 give_final_answer 工具
-      const finalAnswerCall = toolCalls.find(call => call.name === FINAL_ANSWER_TOOL_NAME);
-      
-      if (finalAnswerCall) {
-        // 提取最终答案
-        const answer = (finalAnswerCall.args as { answer?: string }).answer || accumulatedContent;
-        
-        // 发出 final_answer 事件
-        await this.emitEvent(onMessage, {
-          type: 'final_answer',
-          content: answer,
-        });
-        
-        return { isFinalAnswer: true, content: answer };
+      // 检查是否调用了最终答案工具
+      if (this.config.finalAnswerTool) {
+        const finalAnswerCall = toolCalls.find(
+          call => call.name === this.config.finalAnswerTool!.name
+        );
+
+        if (finalAnswerCall) {
+          // 提取最终答案
+          const answer = (finalAnswerCall.args as { answer?: string }).answer || accumulatedContent;
+
+          // 发出 final_answer 事件
+          await this.emitEvent(onMessage, {
+            type: 'final_answer',
+            content: answer,
+          });
+
+          return { isFinalAnswer: true, content: answer };
+        }
       }
-      
+
       // 处理普通工具调用
       for (const call of toolCalls) {
         // 发出 action 事件
@@ -320,11 +348,11 @@ export class ReActExecutor {
         });
 
         // 执行工具
-        const tool = tools.find(t => t.name === call.name);
+        const tool = allTools.find(t => t.name === call.name);
         let observation: string;
 
         if (!tool) {
-          observation = `工具 "${call.name}" 未找到。可用工具: ${tools.map(t => t.name).join(', ')}`;
+          observation = `工具 "${call.name}" 未找到。可用工具: ${allTools.map(t => t.name).join(', ')}`;
           await this.emitEvent(onMessage, { type: 'error', message: observation });
         } else {
           try {
@@ -350,43 +378,8 @@ export class ReActExecutor {
 
       return { isFinalAnswer: false, content: accumulatedContent };
     } else {
-      // 没有 tool_calls - 继续下一轮迭代让 LLM 调用 give_final_answer
-      // 或者 LLM 可能还需要思考
+      // 没有 tool_calls - 继续下一轮迭代
       return { isFinalAnswer: false, content: accumulatedContent };
-    }
-  }
-
-  /**
-   * 创建 LLM 实例
-   */
-  private createLLM(): ChatOpenAI {
-    const baseConfig = {
-      model: this.config.model,
-      temperature: this.config.temperature,
-      apiKey: this.config.apiKey,
-      streaming: this.config.streaming,
-    };
-
-    switch (this.config.provider) {
-      case 'tongyi':
-        return new ChatOpenAI({
-          ...baseConfig,
-          configuration: {
-            baseURL: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
-          },
-        });
-      
-      case 'openai-compatible':
-        return new ChatOpenAI({
-          ...baseConfig,
-          configuration: {
-            baseURL: this.config.baseUrl,
-          },
-        });
-      
-      case 'openai':
-      default:
-        return new ChatOpenAI(baseConfig);
     }
   }
 
@@ -407,43 +400,6 @@ export class ReActExecutor {
 
       return `- ${tool.name}: ${tool.description}\n  参数:\n${paramsDescription}`;
     }).join('\n\n');
-  }
-
-  /**
-   * 使用 LLM 流式生成友好的初始提示
-   */
-  private async streamGreeting(
-    llm: ChatOpenAI,
-    userInput: string,
-    onMessage: ReActInput['onMessage'],
-    greetingId: string
-  ): Promise<void> {
-    const greetingPrompt = `用户说："${userInput}"
-
-请用一句话友好地确认你将帮助用户完成这个任务。要求：
-1. 简洁明了，不超过30个字
-2. 显示你理解了用户的意图
-3. 以"好的"或"没问题"开头
-4. 以"请稍等..."结尾
-
-只回复这一句话，不要其他内容。`;
-
-    const stream = await llm.stream([
-      new SystemMessage('你是一个友好的助手，负责生成简短的确认回复。'),
-      new HumanMessage(greetingPrompt),
-    ]);
-
-    for await (const chunk of stream) {
-      const text = typeof chunk.content === 'string' ? chunk.content : '';
-      if (text) {
-        await this.emitEvent(onMessage, {
-          type: 'stream',
-          thoughtId: greetingId,
-          chunk: text,
-          isThought: true,
-        });
-      }
-    }
   }
 
   /**

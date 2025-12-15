@@ -5,14 +5,11 @@
  * - 外层循环：Planner 生成和调整计划
  * - 内层循环：ReActExecutor 执行每个步骤
  * 
- * 关键特性：
- * - 基于执行结果的动态重规划
- * - 带上下文传递的逐步执行
- * - 计划生成使用 tool call 实现结构化输出
- * - 多模型支持：OpenAI、通义千问和 OpenAI 兼容端点
+ * 这是一个业务无关的基础架构组件。
+ * 所有提示词和消息都可通过 PlannerConfig 配置。
  */
 
-import { ChatOpenAI } from '@langchain/openai';
+import { createLLM } from './BaseLLM.js';
 import { HumanMessage, SystemMessage } from '@langchain/core/messages';
 import { z } from 'zod';
 import { ReActExecutor } from './ReActExecutor.js';
@@ -44,9 +41,9 @@ const PlanRefinementSchema = z.object({
 type PlanRefinement = z.infer<typeof PlanRefinementSchema>;
 
 /**
- * 规划器的系统提示词
+ * 默认规划器系统提示词（导出供外部使用）
  */
-const PLANNER_SYSTEM_PROMPT = `你是一个战略规划 AI。你的工作是将复杂目标分解为可执行的步骤。
+export const DEFAULT_PLANNER_PROMPT = `你是一个战略规划 AI。你的工作是将复杂目标分解为可执行的步骤。
 
 对于每个目标，创建一个包含以下内容的计划：
 1. 清晰、具体的步骤，可以独立执行
@@ -61,9 +58,9 @@ const PLANNER_SYSTEM_PROMPT = `你是一个战略规划 AI。你的工作是将�
 保持步骤专注且可实现。每个步骤应该能够被拥有指定工具的 AI agent 完成。`;
 
 /**
- * 计划优化的系统提示词
+ * 默认重规划系统提示词（导出供外部使用）
  */
-const REFINE_SYSTEM_PROMPT = `你是一个战略规划 AI。根据已完成步骤的执行结果，决定剩余计划是否需要调整。
+export const DEFAULT_REFINE_PROMPT = `你是一个战略规划 AI。根据已完成步骤的执行结果，决定剩余计划是否需要调整。
 
 考虑：
 1. 步骤是否产生了预期结果？
@@ -76,25 +73,52 @@ const REFINE_SYSTEM_PROMPT = `你是一个战略规划 AI。根据已完成步�
 - updatedSteps:（如果重规划）更新后的剩余步骤列表`;
 
 /**
+ * 默认汇总系统提示词（导出供外部使用）
+ */
+export const DEFAULT_SUMMARY_PROMPT = `你是一个有帮助的助手。将已完成计划的结果汇总为给用户的清晰、全面的回复。`;
+
+/**
+ * 默认计划生成消息模板
+ */
+export const defaultPlanMessageTemplate = (goal: string, toolDescriptions: string): string =>
+  `目标: ${goal}\n\n可用工具:\n${toolDescriptions}\n\n创建一个分步计划来实现这个目标。你必须调用 generate_plan 工具来返回你的计划。`;
+
+/**
+ * 默认重规划消息模板
+ */
+export const defaultRefineMessageTemplate = (plan: Plan, latestResult: string, tools: Tool[]): string => {
+  const completedSteps = plan.steps.filter(s => s.status === 'done');
+  const pendingSteps = plan.steps.filter(s => s.status === 'pending');
+
+  return `目标: ${plan.goal}
+
+已完成步骤:
+${completedSteps.map(s => `- ${s.id}: ${s.description}\n  结果: ${s.result}`).join('\n')}
+
+最新结果: ${latestResult}
+
+剩余步骤:
+${pendingSteps.map(s => `- ${s.id}: ${s.description}`).join('\n')}
+
+可用工具: ${tools.map(t => t.name).join(', ')}
+
+根据最新执行结果，剩余计划是否需要调整？`;
+};
+
+/**
+ * 默认汇总消息模板
+ */
+export const defaultSummaryMessageTemplate = (plan: Plan): string => {
+  const stepSummaries = plan.steps
+    .filter(s => s.status === 'done')
+    .map(s => `步骤 ${s.id}: ${s.description}\n结果: ${s.result}`)
+    .join('\n\n');
+
+  return `原始目标: ${plan.goal}\n\n已完成步骤:\n${stepSummaries}\n\n提供一个回答用户原始目标的最终摘要。`;
+};
+
+/**
  * PlannerExecutor - 实现 Planner + ReAct 双循环架构
- * 
- * @example
- * ```typescript
- * // 使用 OpenAI
- * const planner = new PlannerExecutor({
- *   plannerModel: 'gpt-4',
- *   executorModel: 'gpt-3.5-turbo',
- *   provider: 'openai'
- * });
- * 
- * // 使用通义千问
- * const planner = new PlannerExecutor({
- *   plannerModel: 'qwen-plus',
- *   executorModel: 'qwen-turbo',
- *   provider: 'tongyi',
- *   apiKey: process.env.DASHSCOPE_API_KEY
- * });
- * ```
  */
 export class PlannerExecutor {
   private config: {
@@ -105,6 +129,13 @@ export class PlannerExecutor {
     maxRePlanAttempts: number;
     apiKey?: string;
     baseUrl?: string;
+    systemPrompt: string;
+    refinePrompt: string;
+    summaryPrompt: string;
+    planMessageTemplate: (goal: string, toolDescriptions: string) => string;
+    refineMessageTemplate: (plan: Plan, latestResult: string, tools: Tool[]) => string;
+    summaryMessageTemplate: (plan: Plan) => string;
+    executorConfig?: Partial<PlannerConfig['executorConfig']>;
   };
 
   constructor(config: PlannerConfig) {
@@ -116,6 +147,13 @@ export class PlannerExecutor {
       maxRePlanAttempts: config.maxRePlanAttempts ?? 3,
       apiKey: config.apiKey,
       baseUrl: config.baseUrl,
+      systemPrompt: config.systemPrompt ?? DEFAULT_PLANNER_PROMPT,
+      refinePrompt: config.refinePrompt ?? DEFAULT_REFINE_PROMPT,
+      summaryPrompt: config.summaryPrompt ?? DEFAULT_SUMMARY_PROMPT,
+      planMessageTemplate: config.planMessageTemplate ?? defaultPlanMessageTemplate,
+      refineMessageTemplate: config.refineMessageTemplate ?? defaultRefineMessageTemplate,
+      summaryMessageTemplate: config.summaryMessageTemplate ?? defaultSummaryMessageTemplate,
+      executorConfig: config.executorConfig,
     };
   }
 
@@ -153,15 +191,10 @@ export class PlannerExecutor {
           apiKey: this.config.apiKey,
           baseUrl: this.config.baseUrl,
           streaming: true,
-          shortGreeting:false,
+          ...this.config.executorConfig,
         });
 
         // 执行步骤
-        // await onMessage?.({
-        //   type: 'thought',
-        //   content: `正在执行步骤 ${currentStep.id}: ${currentStep.description}`,
-        // });
-
         const stepResult = await executor.run({
           input: currentStep.description,
           context: this.formatPlanHistory(plan),
@@ -182,7 +215,7 @@ export class PlannerExecutor {
         // 动态重规划
         if (rePlanAttempts < this.config.maxRePlanAttempts) {
           const refinement = await this.refinePlan(plan, stepResult, tools);
-          
+
           if (refinement.shouldReplan && refinement.updatedSteps) {
             await onMessage?.({
               type: 'thought',
@@ -233,25 +266,30 @@ export class PlannerExecutor {
    * 使用 tool call 方式实现结构化输出
    */
   private async generatePlan(goal: string, tools: Tool[]): Promise<Plan> {
-    const llm = this.createLLM(this.config.plannerModel);
-    
+    const llm = createLLM({
+      model: this.config.plannerModel,
+      provider: this.config.provider,
+      apiKey: this.config.apiKey,
+      baseUrl: this.config.baseUrl,
+    });
+
     // 定义 generate_plan 工具，用于获取结构化的计划输出
     const generatePlanTool = {
       name: 'generate_plan',
       description: '生成一个分步执行计划。你必须调用此工具来返回你的计划。',
       schema: PlanSchema,
     };
-    
+
     // 绑定工具并强制使用
     const llmWithTool = llm.bindTools([generatePlanTool], {
       tool_choice: { type: 'function', function: { name: 'generate_plan' } },
     });
-    
+
     const toolDescriptions = tools.map(t => `- ${t.name}: ${t.description}`).join('\n');
 
     const response = await llmWithTool.invoke([
-      new SystemMessage(PLANNER_SYSTEM_PROMPT),
-      new HumanMessage(`目标: ${goal}\n\n可用工具:\n${toolDescriptions}\n\n创建一个分步计划来实现这个目标。你必须调用 generate_plan 工具来返回你的计划。`),
+      new SystemMessage(this.config.systemPrompt),
+      new HumanMessage(this.config.planMessageTemplate(goal, toolDescriptions)),
     ]);
 
     // 从 tool_calls 中提取计划数据
@@ -284,28 +322,18 @@ export class PlannerExecutor {
    * 根据执行结果优化计划
    */
   private async refinePlan(plan: Plan, latestResult: string, tools: Tool[]): Promise<PlanRefinement> {
-    const llm = this.createLLM(this.config.plannerModel);
+    const llm = createLLM({
+      model: this.config.plannerModel,
+      provider: this.config.provider,
+      apiKey: this.config.apiKey,
+      baseUrl: this.config.baseUrl,
+    });
     const structuredLLM = llm.withStructuredOutput(PlanRefinementSchema);
 
-    const completedSteps = plan.steps.filter(s => s.status === 'done');
-    const pendingSteps = plan.steps.filter(s => s.status === 'pending');
-
-    const prompt = `目标: ${plan.goal}
-
-已完成步骤:
-${completedSteps.map(s => `- ${s.id}: ${s.description}\n  结果: ${s.result}`).join('\n')}
-
-最新结果: ${latestResult}
-
-剩余步骤:
-${pendingSteps.map(s => `- ${s.id}: ${s.description}`).join('\n')}
-
-可用工具: ${tools.map(t => t.name).join(', ')}
-
-根据最新执行结果，剩余计划是否需要调整？`;
+    const prompt = this.config.refineMessageTemplate(plan, latestResult, tools);
 
     const response = await structuredLLM.invoke([
-      new SystemMessage(REFINE_SYSTEM_PROMPT),
+      new SystemMessage(this.config.refinePrompt),
       new HumanMessage(prompt),
     ]);
 
@@ -316,15 +344,16 @@ ${pendingSteps.map(s => `- ${s.id}: ${s.description}`).join('\n')}
    * 生成汇总计划执行的最终响应
    */
   private async generateFinalResponse(plan: Plan): Promise<string> {
-    const llm = this.createLLM(this.config.plannerModel);
-    const stepSummaries = plan.steps
-      .filter(s => s.status === 'done')
-      .map(s => `步骤 ${s.id}: ${s.description}\n结果: ${s.result}`)
-      .join('\n\n');
+    const llm = createLLM({
+      model: this.config.plannerModel,
+      provider: this.config.provider,
+      apiKey: this.config.apiKey,
+      baseUrl: this.config.baseUrl,
+    });
 
     const response = await llm.invoke([
-      new SystemMessage('你是一个有帮助的助手。将已完成计划的结果汇总为给用户的清晰、全面的回复。'),
-      new HumanMessage(`原始目标: ${plan.goal}\n\n已完成步骤:\n${stepSummaries}\n\n提供一个回答用户原始目标的最终摘要。`),
+      new SystemMessage(this.config.summaryPrompt),
+      new HumanMessage(this.config.summaryMessageTemplate(plan)),
     ]);
 
     return response.content as string;
@@ -365,39 +394,5 @@ ${pendingSteps.map(s => `- ${s.id}: ${s.description}`).join('\n')}
       return `步骤 ${entry.stepId} (${step?.description || '未知'}): ${entry.result}`;
     });
     return `之前步骤的结果:\n${entries.join('\n\n')}`;
-  }
-
-  /**
-   * 创建 LLM 实例
-   * 支持 OpenAI、通义千问和 OpenAI 兼容端点
-   * 统一使用 ChatOpenAI 以支持 bindTools
-   */
-  private createLLM(model: string): ChatOpenAI {
-    const baseConfig = {
-      model,
-      temperature: 0,
-      apiKey: this.config.apiKey,
-    };
-
-    switch (this.config.provider) {
-      case 'tongyi':
-        // 使用通义千问的 OpenAI 兼容端点
-        return new ChatOpenAI({
-          ...baseConfig,
-          configuration: {
-            baseURL: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
-          },
-        });
-      
-      case 'openai-compatible':
-        return new ChatOpenAI({
-          ...baseConfig,
-          configuration: { baseURL: this.config.baseUrl },
-        });
-      
-      case 'openai':
-      default:
-        return new ChatOpenAI(baseConfig);
-    }
   }
 }
