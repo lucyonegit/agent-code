@@ -105,6 +105,8 @@ export interface CodingAgentInput {
   onProgress?: (event: CodingAgentEvent) => void | Promise<void>;
 }
 
+import type { Plan } from '../../types/index';
+
 /**
  * CodingAgent 事件
  */
@@ -112,6 +114,8 @@ export type CodingAgentEvent =
   | { type: 'phase_start'; phase: 'bdd' | 'architect' | 'codegen'; message: string }
   | { type: 'phase_complete'; phase: 'bdd' | 'architect' | 'codegen'; data: any }
   | { type: 'thought'; content: string }
+  | { type: 'stream'; thoughtId: string; chunk: string; isThought: boolean }
+  | { type: 'plan_update'; plan: Plan }
   | { type: 'error'; message: string };
 
 /**

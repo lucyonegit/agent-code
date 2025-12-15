@@ -1,22 +1,66 @@
 /**
  * CodingAgent - 编码智能体
  * 
- * 完整的编码流水线：
+ * 基于 PlannerExecutor 的编码流水线：
  * 用户需求 → BDD 拆解 → 架构设计 → 代码生成
  */
 
-import { decomposeToBDD } from './tools/bdd';
-import { generateArchitecture } from './tools/architect';
-import { generateCode } from './tools/codegen';
+import { PlannerExecutor } from '../../core/PlannerExecutor';
+import { CODING_AGENT_PROMPTS } from './config/prompt';
+import { createBDDTool } from './tools/bdd';
+import { createArchitectTool } from './tools/architect';
+import { createCodeGenTool } from './tools/codegen';
+import { createRagSearchTool, createGetComponentListTool } from './tools/rag';
+import type { Tool, ReActEvent } from '../../types/index';
 import type {
   CodingAgentConfig,
   CodingAgentInput,
   CodingAgentResult,
   CodingAgentEvent,
+  BDDFeature,
+  ArchitectureFile,
+  CodeGenResult,
 } from '../types/index';
 
+// ============================================================================
+// CodingAgent 自定义 Prompt
+// ============================================================================
+
+const CODING_PLANNER_PROMPT = `你是编码规划器。
+你的任务是分析用户请求，输出精炼的高层实现计划（严格为 3 步）。
+
+范围与约束：
+1. 不包含任何查询组件 API/属性或文档的步骤。
+2. 不包含数据抓取或工具执行的步骤。
+3. 仅关注高层阶段：明确目标、BDD 拆解、项目搭建、组件/页面接线、路由、测试。
+4. 组件文档的使用留给代码生成阶段。
+
+工作流程固定为以下三步：
+1. **需求分析与 BDD 拆解**: 使用 decompose_to_bdd 工具将用户需求转换为 BDD 格式
+2. **架构设计**: 使用 design_architecture 工具基于 BDD 场景设计项目文件结构
+3. **代码生成**: 先用 search_component_docs 获取组件文档，再用 generate_code 生成代码
+
+返回格式要求返回一个JSON 对象，包含以下字段：
+- goal: 总体目标
+- steps: 步骤数组，每个步骤包含 id、description、requiredTools（可选）、dependencies（可选）
+- reasoning: 选择此计划的理由
+
+保持步骤专注且可实现。每个步骤应该能够被拥有指定工具的 AI agent 完成。
+
+可用工具：
+- decompose_to_bdd: 将需求拆解为 BDD 场景
+- design_architecture: 设计项目架构
+- search_component_docs: 搜索组件文档
+- get_component_list: 获取可用组件列表
+- generate_code: 生成项目代码`;
+
+
+// ============================================================================
+// CodingAgent 主类
+// ============================================================================
+
 /**
- * CodingAgent - 编码智能体
+ * CodingAgent - 基于 PlannerExecutor 的编码智能体
  * 
  * @example
  * ```typescript
@@ -27,13 +71,14 @@ import type {
  * });
  * 
  * const result = await agent.run({
- *   requirement: '实现一个用户登录页面，包含用户名、密码输入框和登录按钮',
+ *   requirement: '实现一个用户登录页面',
  *   onProgress: (event) => console.log(event),
  * });
  * ```
  */
 export class CodingAgent {
   private config: CodingAgentConfig;
+  private plannerExecutor: PlannerExecutor;
 
   constructor(config: CodingAgentConfig) {
     this.config = {
@@ -43,111 +88,179 @@ export class CodingAgent {
       baseUrl: config.baseUrl,
       streaming: config.streaming ?? false,
     };
+
+    this.plannerExecutor = new PlannerExecutor({
+      plannerModel: config.model,
+      executorModel: config.model,
+      provider: config.provider,
+      apiKey: config.apiKey,
+      baseUrl: config.baseUrl,
+      maxIterationsPerStep: 15,
+      maxRePlanAttempts: 2,
+      systemPrompt: CODING_PLANNER_PROMPT,
+    });
   }
 
   /**
-   * 运行完整的编码流水线
+   * 运行编码流水线
    */
   async run(input: CodingAgentInput): Promise<CodingAgentResult> {
     const { requirement, onProgress } = input;
 
+    // 创建工具集
+    const llmConfig = {
+      model: this.config.model,
+      provider: this.config.provider,
+      apiKey: this.config.apiKey,
+      baseUrl: this.config.baseUrl,
+    };
+
+    const tools: Tool[] = [
+      createBDDTool(llmConfig),
+      createArchitectTool(llmConfig),
+      createRagSearchTool(),
+      createGetComponentListTool(),
+      createCodeGenTool(llmConfig),
+    ];
+
+    // 存储中间结果
+    let bddFeatures: BDDFeature[] = [];
+    let architecture: ArchitectureFile[] = [];
+    let codeResult: CodeGenResult | undefined;
+
     try {
-      // === 阶段 1: BDD 拆解 ===
-      await this.emitEvent(onProgress, {
-        type: 'phase_start',
-        phase: 'bdd',
-        message: '正在将需求拆解为 BDD 场景...',
-      });
-
-      const bddFeatures = await decomposeToBDD(requirement, {
-        model: this.config.model,
-        provider: this.config.provider,
-        apiKey: this.config.apiKey,
-        baseUrl: this.config.baseUrl,
-      });
-
-      await this.emitEvent(onProgress, {
-        type: 'phase_complete',
-        phase: 'bdd',
-        data: bddFeatures,
-      });
-
-      // === 阶段 2: 架构设计 ===
-      await this.emitEvent(onProgress, {
-        type: 'phase_start',
-        phase: 'architect',
-        message: '正在基于 BDD 场景设计项目架构...',
-      });
-
-      const architecture = await generateArchitecture(bddFeatures, {
-        model: this.config.model,
-        provider: this.config.provider,
-        apiKey: this.config.apiKey,
-        baseUrl: this.config.baseUrl,
-      });
-
-      await this.emitEvent(onProgress, {
-        type: 'phase_complete',
-        phase: 'architect',
-        data: architecture,
-      });
-
-      // === 阶段 3: 代码生成 ===
-      await this.emitEvent(onProgress, {
-        type: 'phase_start',
-        phase: 'codegen',
-        message: '正在生成项目代码...',
-      });
-
-      // 使用 CodeGenerator 执行代码生成
-      const codeResult = await generateCode(bddFeatures, architecture, {
-        model: this.config.model,
-        provider: this.config.provider,
-        apiKey: this.config.apiKey,
-        baseUrl: this.config.baseUrl,
-      }, {
-        onThought: (content) => {
-          this.emitEvent(onProgress, { type: 'thought', content });
+      const result = await this.plannerExecutor.run({
+        goal: `根据以下用户需求，完成编码任务：\n\n${requirement}`,
+        tools,
+        onMessage: async (event: ReActEvent) => {
+          await this.handleReActEvent(event, onProgress);
+          await this.extractResults(event, { bddFeatures, architecture, codeResult }, onProgress);
+        },
+        onPlanUpdate: async (plan) => {
+          await this.emitEvent(onProgress, {
+            type: 'plan_update',
+            plan,
+          });
         },
       });
 
-      await this.emitEvent(onProgress, {
-        type: 'phase_complete',
-        phase: 'codegen',
-        data: codeResult,
-      });
+      if (result.success) {
+        const parsed = this.parseCodeGenResult(result.response);
 
-      return {
-        success: true,
-        bddFeatures,
-        architecture,
-        generatedFiles: codeResult.files,
-        summary: codeResult.summary,
-      };
+        return {
+          success: true,
+          bddFeatures,
+          architecture,
+          generatedFiles: parsed?.files || codeResult?.files || [],
+          summary: parsed?.summary || codeResult?.summary || result.response,
+        };
+      } else {
+        return { success: false, error: result.response };
+      }
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : '未知错误';
-
-      await this.emitEvent(onProgress, {
-        type: 'error',
-        message: errorMessage,
-      });
-
-      return {
-        success: false,
-        error: errorMessage,
-      };
+      await this.emitEvent(onProgress, { type: 'error', message: errorMessage });
+      return { success: false, error: errorMessage };
     }
+  }
+
+  /**
+   * 处理 ReActEvent
+   */
+  private async handleReActEvent(event: ReActEvent, onProgress?: CodingAgentInput['onProgress']): Promise<void> {
+    switch (event.type) {
+      case 'stream':
+        // 转发流式事件以实现实时 thought 显示
+        await this.emitEvent(onProgress, {
+          type: 'stream',
+          thoughtId: event.thoughtId,
+          chunk: event.chunk,
+          isThought: event.isThought,
+        });
+        break;
+      case 'thought':
+        await this.emitEvent(onProgress, { type: 'thought', content: event.content });
+        break;
+      case 'action':
+        if (event.toolName === 'decompose_to_bdd') {
+          await this.emitEvent(onProgress, { type: 'phase_start', phase: 'bdd', message: '正在拆解 BDD 场景...' });
+        } else if (event.toolName === 'design_architecture') {
+          await this.emitEvent(onProgress, { type: 'phase_start', phase: 'architect', message: '正在设计项目架构...' });
+        } else if (event.toolName === 'generate_code') {
+          await this.emitEvent(onProgress, { type: 'phase_start', phase: 'codegen', message: '正在生成代码...' });
+        }
+        break;
+      case 'observation':
+        // 不再发送原始 observation，由 extractResults 处理结构化数据
+        break;
+      case 'error':
+        await this.emitEvent(onProgress, { type: 'error', message: event.message });
+        break;
+    }
+  }
+
+  /**
+   * 从事件中提取结果并发送 phase_complete 事件（只发送一次）
+   */
+  private async extractResults(
+    event: ReActEvent,
+    results: { bddFeatures: BDDFeature[]; architecture: ArchitectureFile[]; codeResult?: CodeGenResult },
+    onProgress?: CodingAgentInput['onProgress']
+  ): Promise<void> {
+    if (event.type === 'observation') {
+      try {
+        const json = JSON.parse(event.content);
+
+        // 检测 BDD 结果（只在第一次检测到时发送）
+        if (Array.isArray(json) && json[0]?.feature_id && results.bddFeatures.length === 0) {
+          results.bddFeatures = json;
+          await this.emitEvent(onProgress, {
+            type: 'phase_complete',
+            phase: 'bdd',
+            data: json,
+          });
+        }
+
+        // 检测架构结果（只在第一次检测到时发送）
+        if (Array.isArray(json) && json[0]?.path && json[0]?.type && results.architecture.length === 0) {
+          results.architecture = json;
+          await this.emitEvent(onProgress, {
+            type: 'phase_complete',
+            phase: 'architect',
+            data: json,
+          });
+        }
+
+        // 检测代码生成结果（只在第一次检测到时发送）
+        if (json.files && Array.isArray(json.files) && !results.codeResult) {
+          results.codeResult = json;
+          await this.emitEvent(onProgress, {
+            type: 'phase_complete',
+            phase: 'codegen',
+            data: json,
+          });
+        }
+      } catch { }
+    }
+  }
+
+  /**
+   * 解析代码生成结果
+   */
+  private parseCodeGenResult(response: string): CodeGenResult | null {
+    try {
+      const jsonMatch = response.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
+      const jsonStr = jsonMatch ? jsonMatch[1] : response;
+      const result = JSON.parse(jsonStr);
+      if (result.files && Array.isArray(result.files)) return result;
+    } catch { }
+    return null;
   }
 
   /**
    * 发出事件
    */
-  private async emitEvent(
-    handler: CodingAgentInput['onProgress'],
-    event: CodingAgentEvent
-  ): Promise<void> {
-    if (handler) {
-      await handler(event);
-    }
+  private async emitEvent(handler: CodingAgentInput['onProgress'], event: CodingAgentEvent): Promise<void> {
+    if (handler) await handler(event);
   }
 }

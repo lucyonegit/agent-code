@@ -11,14 +11,16 @@
 import http from 'http';
 import { ReActExecutor } from '../core/ReActExecutor.js';
 import { PlannerExecutor } from '../core/PlannerExecutor.js';
+import { CodingAgent } from '../sub-agent/coding-agent/index.js';
 import { type Tool, type ReActEvent, type Plan } from '../types/index.js';
+import type { CodingAgentEvent } from '../sub-agent/types/index.js';
 import { z } from 'zod';
 
 // ============================================================================
 // 配置
 // ============================================================================
 
-const PORT = 3000;
+const PORT = 3001;
 const API_KEY = 'sk-2da524e57ee64485ab4208430ab35f4d';
 
 // ============================================================================
@@ -252,9 +254,63 @@ async function handlePlannerRequest(
   }
 }
 
+/**
+ * 处理 Coding 请求
+ */
+async function handleCodingRequest(
+  req: http.IncomingMessage,
+  res: http.ServerResponse
+): Promise<void> {
+  setSSEHeaders(res);
+
+  try {
+    const body = await parseBody(req);
+    const { requirement } = body;
+
+    if (!requirement) {
+      sendSSE(res, 'error', { message: '缺少 requirement 参数' });
+      res.end();
+      return;
+    }
+
+    // 创建 CodingAgent
+    const agent = new CodingAgent({
+      model: 'qwen-max',
+      provider: 'tongyi',
+      apiKey: API_KEY,
+    });
+
+    // 执行并流式返回结果
+    const result = await agent.run({
+      requirement,
+      onProgress: (event: CodingAgentEvent) => {
+        // 直接发送事件，前端会根据类型处理
+        sendSSE(res, event.type, event);
+      },
+    });
+
+    // 发送完成事件
+    sendSSE(res, 'coding_done', {
+      type: 'coding_done',
+      success: result.success,
+      bddFeatures: result.bddFeatures,
+      architecture: result.architecture,
+      generatedFiles: result.generatedFiles,
+      summary: result.summary,
+      error: result.error,
+    });
+    res.end();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : '未知错误';
+    sendSSE(res, 'error', { message });
+    res.end();
+  }
+}
+
 // ============================================================================
 // 服务器创建
 // ============================================================================
+
 
 const server = http.createServer(async (req, res) => {
   const { method, url } = req;
@@ -304,6 +360,12 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  // Coding 接口
+  if (method === 'POST' && url === '/api/coding') {
+    await handleCodingRequest(req, res);
+    return;
+  }
+
   // 404
   res.writeHead(404, { 'Content-Type': 'application/json' });
   res.end(JSON.stringify({ error: 'Not Found' }));
@@ -318,9 +380,11 @@ server.listen(PORT, () => {
   console.log(`  GET  http://localhost:${PORT}/api/tools    - 获取可用工具`);
   console.log(`  POST http://localhost:${PORT}/api/react    - ReAct 执行 (SSE)`);
   console.log(`  POST http://localhost:${PORT}/api/planner  - Planner 执行 (SSE)`);
+  console.log(`  POST http://localhost:${PORT}/api/coding   - Coding 执行 (SSE)`);
   console.log('');
   console.log('示例请求:');
-  console.log(`  curl -X POST http://localhost:${PORT}/api/planner \\`);
+  console.log(`  curl -X POST http://localhost:${PORT}/api/coding \\`);
   console.log('    -H "Content-Type: application/json" \\');
-  console.log('    -d \'{"goal": "查询北京和上海的天气并比较"}\'');
+  console.log('    -d \'{"requirement": "实现一个用户登录页面"}\'');
 });
+

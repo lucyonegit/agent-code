@@ -33,9 +33,9 @@ const PlanRefinementSchema = z.object({
   updatedSteps: z.array(z.object({
     id: z.string(),
     description: z.string(),
-    requiredTools: z.array(z.string()).optional(),
-    status: z.enum(['pending', 'skipped']).optional(),
-  })).optional().describe('如果需要重规划，更新后的剩余步骤'),
+    requiredTools: z.array(z.string()).nullish(),
+    status: z.enum(['pending', 'skipped']).nullish(),
+  })).nullish().describe('如果需要重规划，更新后的剩余步骤'),
 });
 
 type PlanRefinement = z.infer<typeof PlanRefinementSchema>;
@@ -194,6 +194,7 @@ export class PlannerExecutor {
           ...this.config.executorConfig,
         });
 
+        console.log('ReAct Executor Running...');
         // 执行步骤
         const stepResult = await executor.run({
           input: currentStep.description,
@@ -228,11 +229,11 @@ export class PlannerExecutor {
 
             plan.steps = [
               ...plan.steps.filter(s => completedStepIds.has(s.id)),
-              ...refinement.updatedSteps.map(s => ({
+              ...(refinement.updatedSteps || []).map(s => ({
                 id: s.id,
                 description: s.description,
                 status: s.status || 'pending' as const,
-                requiredTools: s.requiredTools,
+                requiredTools: s.requiredTools ?? undefined,
               })),
             ];
 

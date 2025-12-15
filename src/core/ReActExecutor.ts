@@ -153,8 +153,12 @@ export class ReActExecutor {
     // 跟踪迭代历史
     const iterationHistory: string[] = [];
 
+    console.log('ReAct Executor 循环开始...');
+
     // 主 ReAct 循环
     for (let iteration = 1; iteration <= this.config.maxIterations; iteration++) {
+
+      console.log(`第${iteration}循环开始...`);
       // 为本次迭代生成唯一的 thoughtId
       const iterationId = `thought_${Date.now()}_${iteration}`;
 
@@ -286,6 +290,7 @@ export class ReActExecutor {
       if (chunk.content) {
         const text = typeof chunk.content === 'string' ? chunk.content : '';
         if (text) {
+          console.log(`thought: ${text}`);
           accumulatedContent += text;
           // 实时推送 thought，附带 thoughtId
           await this.emitEvent(onMessage, {
@@ -317,6 +322,7 @@ export class ReActExecutor {
     messages.push(aiMessage);
 
     // 处理 Action
+    console.log(`是否有工具调用: ${accumulatedToolCalls.length > 0}`);
     if (accumulatedToolCalls.length > 0) {
       // 检查是否调用了最终答案工具
       if (this.config.finalAnswerTool) {
@@ -324,6 +330,7 @@ export class ReActExecutor {
           call => call.name === this.config.finalAnswerTool!.name
         );
 
+        console.log(`是否有最终答案调用: ${!!finalAnswerCall}`);
         if (finalAnswerCall) {
           // 提取最终答案
           const answer = (finalAnswerCall.args as { answer?: string }).answer || accumulatedContent;
@@ -339,6 +346,7 @@ export class ReActExecutor {
       }
 
       // 处理普通工具调用
+      console.log(`是否有普通工具调用: ${toolCalls.length > 0}`);
       for (const call of toolCalls) {
         // 发出 action 事件
         await this.emitEvent(onMessage, {

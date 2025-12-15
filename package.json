@@ -10,7 +10,8 @@
     "dev": "ts-node --esm",
     "typecheck": "tsc --noEmit",
     "example:basic": "npx tsx src/examples/basic-usage.ts",
-    "example:planner": "npx tsx src/examples/planner-usage.ts"
+    "example:planner": "npx tsx src/examples/planner-usage.ts",
+    "serve":"npx tsx src/server/index.ts"
   },
   "keywords": [
     "react-agent",

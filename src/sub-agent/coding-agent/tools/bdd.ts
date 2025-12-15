@@ -4,81 +4,87 @@
  */
 
 import { z } from 'zod';
-import { createLLM } from '../../../core/BaseLLM';
 import { HumanMessage, SystemMessage } from '@langchain/core/messages';
+import { createLLM } from '../../../core/BaseLLM';
 import { CODING_AGENT_PROMPTS } from '../config/prompt';
-import type { BDDFeature } from '../../types/index';
+import type { Tool, LLMProvider } from '../../../types/index';
 
 /**
- * BDD Feature 输出的 Zod schema
+ * BDD Feature Schema - 返回数组格式
+ * [
+ *   {
+ *     "feature_id": "auth_feature",
+ *     "feature_title": "User Authentication",
+ *     "description": "As a website user, I want to log in...",
+ *     "scenarios": [
+ *       { "id": "scenario_1", "title": "Successful Login", "given": ["..."], "when": ["..."], "then": ["..."] }
+ *     ]
+ *   }
+ * ]
  */
-const BDDScenarioSchema = z.object({
-  id: z.string(),
-  title: z.string(),
-  given: z.array(z.string()),
-  when: z.array(z.string()),
-  then: z.array(z.string()),
-});
-
 const BDDFeatureSchema = z.object({
-  feature_id: z.string(),
-  feature_title: z.string(),
-  description: z.string(),
-  scenarios: z.array(BDDScenarioSchema),
+  feature_id: z.string().describe('功能唯一标识'),
+  feature_title: z.string().describe('功能标题'),
+  description: z.string().describe('功能描述'),
+  scenarios: z.array(z.object({
+    id: z.string().describe('场景 ID'),
+    title: z.string().describe('场景标题'),
+    given: z.array(z.string()).describe('前置条件'),
+    when: z.array(z.string()).describe('触发动作'),
+    then: z.array(z.string()).describe('预期结果'),
+  })),
 });
 
-const BDDOutputSchema = z.array(BDDFeatureSchema);
+export const BDDResultSchema = z.array(BDDFeatureSchema);
 
-export interface BDDDecomposerConfig {
+export interface LLMConfig {
   model: string;
-  provider: 'openai' | 'tongyi' | 'openai-compatible';
+  provider: LLMProvider;
   apiKey?: string;
   baseUrl?: string;
 }
 
 /**
- * 执行 BDD 拆解
- * @param requirement 用户需求描述
- * @param config LLM 配置
- * @returns BDD Feature 数组
+ * 创建 BDD 拆解工具
  */
-export async function decomposeToBDD(
-  requirement: string,
-  config: BDDDecomposerConfig
-): Promise<BDDFeature[]> {
-  const llm = createLLM({
-    model: config.model,
-    provider: config.provider,
-    apiKey: config.apiKey,
-    baseUrl: config.baseUrl,
-  });
+export function createBDDTool(config: LLMConfig): Tool {
+  return {
+    name: 'decompose_to_bdd',
+    description: '将用户需求拆解为 BDD（行为驱动开发）场景结构。返回 BDD Feature 数组。',
+    parameters: z.object({
+      requirement: z.string().describe('用户需求描述'),
+    }),
+    execute: async (args) => {
+      const llm = createLLM({
+        model: config.model,
+        provider: config.provider,
+        apiKey: config.apiKey,
+        baseUrl: config.baseUrl,
+      });
 
-  // 定义 BDD 生成工具
-  const bddTool = {
-    name: 'generate_bdd',
-    description: '生成 BDD 场景结构。你必须调用此工具来返回 BDD 拆解结果。',
-    schema: BDDOutputSchema,
+      const bddTool = {
+        name: 'output_bdd',
+        description: '输出 BDD 拆解结果',
+        schema: BDDResultSchema,
+      };
+
+      const llmWithTool = llm.bindTools([bddTool], {
+        tool_choice: { type: 'function', function: { name: 'output_bdd' } },
+      });
+
+      const prompt = CODING_AGENT_PROMPTS.BDD_DECOMPOSER_PROMPT.replace('{requirement}', args.requirement);
+
+      const response = await llmWithTool.invoke([
+        new SystemMessage(CODING_AGENT_PROMPTS.SYSTEM_PERSONA),
+        new HumanMessage(prompt),
+      ]);
+
+      if (response.tool_calls && response.tool_calls.length > 0) {
+        const result = response.tool_calls[0].args;
+        return JSON.stringify(result, null, 2);
+      }
+
+      return JSON.stringify([]);
+    },
   };
-
-  const llmWithTool = llm.bindTools([bddTool], {
-    tool_choice: { type: 'function', function: { name: 'generate_bdd' } },
-  });
-
-  const prompt = CODING_AGENT_PROMPTS.BDD_DECOMPOSER_PROMPT.replace('{requirement}', requirement);
-
-  const response = await llmWithTool.invoke([
-    new SystemMessage(CODING_AGENT_PROMPTS.SYSTEM_PERSONA),
-    new HumanMessage(prompt),
-  ]);
-
-  if (!response.tool_calls || response.tool_calls.length === 0) {
-    throw new Error('LLM 未返回 BDD 工具调用');
-  }
-
-  const toolCall = response.tool_calls[0];
-  if (toolCall.name !== 'generate_bdd') {
-    throw new Error(`意外的工具调用: ${toolCall.name}`);
-  }
-
-  return toolCall.args as BDDFeature[];
 }
