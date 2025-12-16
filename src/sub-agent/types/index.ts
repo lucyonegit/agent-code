@@ -146,6 +146,7 @@ export type CodingAgentEvent =
   | { type: 'tool_call_result'; toolCallId: string; toolName: string; result: string; success: boolean; duration: number; timestamp: number }
   | { type: 'plan_update'; plan: Plan; timestamp: number }
   | { type: 'error'; message: string; timestamp: number }
+  | { type: 'complete'; timestamp: number }
   | BDDGeneratedEvent
   | ArchitectureGeneratedEvent
   | CodeGeneratedEvent;

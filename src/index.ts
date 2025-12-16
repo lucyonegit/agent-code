@@ -5,7 +5,7 @@
 
 // 核心组件
 export { ReActExecutor } from './core/ReActExecutor.js';
-export { ReActParser } from './core/ReActParser.js';
+
 export { ToolRegistry, toolToLangChain, toolsToLangChain } from './core/ToolRegistry.js';
 export { PlannerExecutor } from './core/PlannerExecutor.js';
 

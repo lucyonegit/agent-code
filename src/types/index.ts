@@ -175,14 +175,6 @@ export type ReActEvent =
   | ToolCallResultEvent
   | FinalResultEvent
   | ErrorEvent
-  | StepStartEvent
-  | StepCompleteEvent
-  // 向后兼容
-  | ActionEvent
-  | ObservationEvent
-  | FinalAnswerEvent
-  | StreamEvent;
-
 /**
  * 处理 ReAct 事件的回调函数类型
  */

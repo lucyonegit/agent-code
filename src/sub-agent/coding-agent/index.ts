@@ -10,7 +10,6 @@ import { CODING_AGENT_PROMPTS } from './config/prompt';
 import { createBDDTool } from './tools/bdd';
 import { createArchitectTool } from './tools/architect';
 import { createCodeGenTool } from './tools/codegen';
-import { createRagSearchTool, createGetComponentListTool } from './tools/rag';
 import type { Tool, ReActEvent } from '../../types/index';
 import type {
   CodingAgentConfig,
@@ -38,7 +37,7 @@ const CODING_PLANNER_PROMPT = `你是编码规划器。
 工作流程固定为以下三步：
 1. **需求分析与 BDD 拆解**: 使用 decompose_to_bdd 工具将用户需求转换为 BDD 格式
 2. **架构设计**: 使用 design_architecture 工具基于 BDD 场景设计项目文件结构
-3. **代码生成**: 先用 search_component_docs 获取组件文档，再用 generate_code 生成代码
+3. **代码生成**: 使用 generate_code 工具生成代码（该工具会自动获取组件文档）
 
 返回格式要求返回一个JSON 对象，包含以下字段：
 - goal: 总体目标
@@ -50,30 +49,10 @@ const CODING_PLANNER_PROMPT = `你是编码规划器。
 可用工具：
 - decompose_to_bdd: 将需求拆解为 BDD 场景
 - design_architecture: 设计项目架构
-- search_component_docs: 搜索组件文档
-- get_component_list: 获取可用组件列表
-- generate_code: 生成项目代码`;
-
-
-// ============================================================================
-// CodingAgent 主类
-// ============================================================================
+- generate_code: 生成项目代码（自动获取组件文档）`;
 
 /**
  * CodingAgent - 基于 PlannerExecutor 的编码智能体
- * 
- * @example
- * ```typescript
- * const agent = new CodingAgent({
- *   model: 'qwen-plus',
- *   provider: 'tongyi',
- *   apiKey: process.env.DASHSCOPE_API_KEY,
- * });
- * 
- * const result = await agent.run({
- *   requirement: '实现一个用户登录页面',
- *   onProgress: (event) => console.log(event),
- * });
  * ```
  */
 export class CodingAgent {
@@ -118,23 +97,22 @@ export class CodingAgent {
     const tools: Tool[] = [
       createBDDTool(llmConfig),
       createArchitectTool(llmConfig),
-      createRagSearchTool(),
-      createGetComponentListTool(),
       createCodeGenTool(llmConfig),
     ];
 
     // 存储中间结果
-    let bddFeatures: BDDFeature[] = [];
-    let architecture: ArchitectureFile[] = [];
-    let codeResult: CodeGenResult | undefined;
+    const results = {
+      bddFeatures: [] as BDDFeature[],
+      architecture: [] as ArchitectureFile[],
+      codeResult: undefined as CodeGenResult | undefined,
+    };
 
     try {
-      const result = await this.plannerExecutor.run({
+      await this.plannerExecutor.run({
         goal: `${requirement}`,
         tools,
         onMessage: async (event: ReActEvent) => {
-          await this.handleReActEvent(event, onProgress);
-          await this.extractResults(event, { bddFeatures, architecture, codeResult }, onProgress);
+          await this.handleReActEvent(event, results, onProgress);
         },
         onPlanUpdate: async (plan) => {
           await this.emitEvent(onProgress, {
@@ -145,19 +123,20 @@ export class CodingAgent {
         },
       });
 
-      if (result.success) {
-        const parsed = this.parseCodeGenResult(result.response);
+      // 发送 complete 事件通知业务层
+      await this.emitEvent(onProgress, {
+        type: 'complete',
+        timestamp: Date.now(),
+      });
 
-        return {
-          success: true,
-          bddFeatures,
-          architecture,
-          generatedFiles: parsed?.files || codeResult?.files || [],
-          summary: parsed?.summary || codeResult?.summary || result.response,
-        };
-      } else {
-        return { success: false, error: result.response };
-      }
+      // 直接使用通过事件收集的结果
+      return {
+        success: true,
+        bddFeatures: results.bddFeatures,
+        architecture: results.architecture,
+        generatedFiles: results.codeResult?.files || [],
+        summary: results.codeResult?.summary || '',
+      };
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : '未知错误';
       await this.emitEvent(onProgress, { type: 'error', message: errorMessage, timestamp: Date.now() });
@@ -166,9 +145,13 @@ export class CodingAgent {
   }
 
   /**
-   * 处理 ReActEvent
+   * 处理 ReActEvent（包含事件转发和结果提取）
    */
-  private async handleReActEvent(event: ReActEvent, onProgress?: CodingAgentInput['onProgress']): Promise<void> {
+  private async handleReActEvent(
+    event: ReActEvent,
+    results: { bddFeatures: BDDFeature[]; architecture: ArchitectureFile[]; codeResult?: CodeGenResult },
+    onProgress?: CodingAgentInput['onProgress']
+  ): Promise<void> {
     switch (event.type) {
       case 'thought':
         // 转发新格式的思考事件
@@ -209,6 +192,8 @@ export class CodingAgent {
           duration: event.duration,
           timestamp: event.timestamp,
         });
+        // 提取并存储结果
+        this.extractAndStoreResults(event, results, onProgress);
         break;
       case 'error':
         await this.emitEvent(onProgress, { type: 'error', message: event.message, timestamp: Date.now() });
@@ -217,86 +202,71 @@ export class CodingAgent {
   }
 
   /**
-   * 从事件中提取结果并发送专用事件
+   * 从 tool_call_result 事件中提取结果并发送专用事件
    */
-  private async extractResults(
-    event: ReActEvent,
+  private async extractAndStoreResults(
+    event: ReActEvent & { type: 'tool_call_result' },
     results: { bddFeatures: BDDFeature[]; architecture: ArchitectureFile[]; codeResult?: CodeGenResult },
     onProgress?: CodingAgentInput['onProgress']
   ): Promise<void> {
-    if (event.type === 'tool_call_result') {
-      try {
-        const json = JSON.parse(event.result);
-
-        // 检测 BDD 结果（只在第一次检测到时发送）
-        if (Array.isArray(json) && json[0]?.feature_id && results.bddFeatures.length === 0) {
-          results.bddFeatures = json;
-          // 发送专用的 bdd_generated 事件
-          await this.emitEvent(onProgress, {
-            type: 'bdd_generated',
-            features: json,
-            timestamp: Date.now(),
-          });
-          // 同时发送 phase_complete 事件以保持向后兼容
-          await this.emitEvent(onProgress, {
-            type: 'phase_complete',
-            phase: 'bdd',
-            data: json,
-            timestamp: Date.now(),
-          });
-        }
-
-        // 检测架构结果（只在第一次检测到时发送）
-        if (Array.isArray(json) && json[0]?.path && json[0]?.type && results.architecture.length === 0) {
-          results.architecture = json;
-          // 发送专用的 architecture_generated 事件
-          await this.emitEvent(onProgress, {
-            type: 'architecture_generated',
-            files: json,
-            timestamp: Date.now(),
-          });
-          // 同时发送 phase_complete 事件以保持向后兼容
-          await this.emitEvent(onProgress, {
-            type: 'phase_complete',
-            phase: 'architect',
-            data: json,
-            timestamp: Date.now(),
-          });
-        }
-
-        // 检测代码生成结果（只在第一次检测到时发送）
-        if (json.files && Array.isArray(json.files) && !results.codeResult) {
-          results.codeResult = json;
-          // 发送专用的 code_generated 事件
-          await this.emitEvent(onProgress, {
-            type: 'code_generated',
-            files: json.files,
-            summary: json.summary || '',
-            timestamp: Date.now(),
-          });
-          // 同时发送 phase_complete 事件以保持向后兼容
-          await this.emitEvent(onProgress, {
-            type: 'phase_complete',
-            phase: 'codegen',
-            data: json,
-            timestamp: Date.now(),
-          });
-        }
-      } catch { }
-    }
-  }
-
-  /**
-   * 解析代码生成结果
-   */
-  private parseCodeGenResult(response: string): CodeGenResult | null {
     try {
-      const jsonMatch = response.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
-      const jsonStr = jsonMatch ? jsonMatch[1] : response;
-      const result = JSON.parse(jsonStr);
-      if (result.files && Array.isArray(result.files)) return result;
+      const json = JSON.parse(event.result);
+
+      // 检测 BDD 结果（只在第一次检测到时发送）
+      if (Array.isArray(json) && json[0]?.feature_id && results.bddFeatures.length === 0) {
+        results.bddFeatures = json;
+        // 发送专用的 bdd_generated 事件
+        await this.emitEvent(onProgress, {
+          type: 'bdd_generated',
+          features: json,
+          timestamp: Date.now(),
+        });
+        // 同时发送 phase_complete 事件以保持向后兼容
+        await this.emitEvent(onProgress, {
+          type: 'phase_complete',
+          phase: 'bdd',
+          data: json,
+          timestamp: Date.now(),
+        });
+      }
+
+      // 检测架构结果（只在第一次检测到时发送）
+      if (Array.isArray(json) && json[0]?.path && json[0]?.type && results.architecture.length === 0) {
+        results.architecture = json;
+        // 发送专用的 architecture_generated 事件
+        await this.emitEvent(onProgress, {
+          type: 'architecture_generated',
+          files: json,
+          timestamp: Date.now(),
+        });
+        // 同时发送 phase_complete 事件以保持向后兼容
+        await this.emitEvent(onProgress, {
+          type: 'phase_complete',
+          phase: 'architect',
+          data: json,
+          timestamp: Date.now(),
+        });
+      }
+
+      // 检测代码生成结果（只在第一次检测到时发送）
+      if (json.files && Array.isArray(json.files) && !results.codeResult) {
+        results.codeResult = json;
+        // 发送专用的 code_generated 事件
+        await this.emitEvent(onProgress, {
+          type: 'code_generated',
+          files: json.files,
+          summary: json.summary || '',
+          timestamp: Date.now(),
+        });
+        // 同时发送 phase_complete 事件以保持向后兼容
+        await this.emitEvent(onProgress, {
+          type: 'phase_complete',
+          phase: 'codegen',
+          data: json,
+          timestamp: Date.now(),
+        });
+      }
     } catch { }
-    return null;
   }
 
   /**
