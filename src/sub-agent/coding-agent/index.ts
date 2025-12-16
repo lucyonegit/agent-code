@@ -130,7 +130,7 @@ export class CodingAgent {
 
     try {
       const result = await this.plannerExecutor.run({
-        goal: `根据以下用户需求，完成编码任务：\n\n${requirement}`,
+        goal: `${requirement}`,
         tools,
         onMessage: async (event: ReActEvent) => {
           await this.handleReActEvent(event, onProgress);
@@ -140,6 +140,7 @@ export class CodingAgent {
           await this.emitEvent(onProgress, {
             type: 'plan_update',
             plan,
+            timestamp: Date.now(),
           });
         },
       });
@@ -159,7 +160,7 @@ export class CodingAgent {
       }
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : '未知错误';
-      await this.emitEvent(onProgress, { type: 'error', message: errorMessage });
+      await this.emitEvent(onProgress, { type: 'error', message: errorMessage, timestamp: Date.now() });
       return { success: false, error: errorMessage };
     }
   }
@@ -169,75 +170,116 @@ export class CodingAgent {
    */
   private async handleReActEvent(event: ReActEvent, onProgress?: CodingAgentInput['onProgress']): Promise<void> {
     switch (event.type) {
-      case 'stream':
-        // 转发流式事件以实现实时 thought 显示
+      case 'thought':
+        // 转发新格式的思考事件
         await this.emitEvent(onProgress, {
-          type: 'stream',
+          type: 'thought',
           thoughtId: event.thoughtId,
           chunk: event.chunk,
-          isThought: event.isThought,
+          isComplete: event.isComplete,
+          timestamp: event.timestamp,
         });
         break;
-      case 'thought':
-        await this.emitEvent(onProgress, { type: 'thought', content: event.content });
-        break;
-      case 'action':
+      case 'tool_call':
+        // 发送 phase_start 事件（针对特定工具）
         if (event.toolName === 'decompose_to_bdd') {
-          await this.emitEvent(onProgress, { type: 'phase_start', phase: 'bdd', message: '正在拆解 BDD 场景...' });
+          await this.emitEvent(onProgress, { type: 'phase_start', phase: 'bdd', message: '正在拆解 BDD 场景...', timestamp: Date.now() });
         } else if (event.toolName === 'design_architecture') {
-          await this.emitEvent(onProgress, { type: 'phase_start', phase: 'architect', message: '正在设计项目架构...' });
+          await this.emitEvent(onProgress, { type: 'phase_start', phase: 'architect', message: '正在设计项目架构...', timestamp: Date.now() });
         } else if (event.toolName === 'generate_code') {
-          await this.emitEvent(onProgress, { type: 'phase_start', phase: 'codegen', message: '正在生成代码...' });
+          await this.emitEvent(onProgress, { type: 'phase_start', phase: 'codegen', message: '正在生成代码...', timestamp: Date.now() });
         }
+        // 转发 tool_call 事件（让前端可以显示 ToolCard）
+        await this.emitEvent(onProgress, {
+          type: 'tool_call',
+          toolCallId: event.toolCallId,
+          toolName: event.toolName,
+          args: event.args,
+          timestamp: event.timestamp,
+        });
         break;
-      case 'observation':
-        // 不再发送原始 observation，由 extractResults 处理结构化数据
+      case 'tool_call_result':
+        // 转发 tool_call_result 事件（让前端可以更新 ToolCard 结果）
+        await this.emitEvent(onProgress, {
+          type: 'tool_call_result',
+          toolCallId: event.toolCallId,
+          toolName: event.toolName,
+          result: event.result,
+          success: event.success,
+          duration: event.duration,
+          timestamp: event.timestamp,
+        });
         break;
       case 'error':
-        await this.emitEvent(onProgress, { type: 'error', message: event.message });
+        await this.emitEvent(onProgress, { type: 'error', message: event.message, timestamp: Date.now() });
         break;
     }
   }
 
   /**
-   * 从事件中提取结果并发送 phase_complete 事件（只发送一次）
+   * 从事件中提取结果并发送专用事件
    */
   private async extractResults(
     event: ReActEvent,
     results: { bddFeatures: BDDFeature[]; architecture: ArchitectureFile[]; codeResult?: CodeGenResult },
     onProgress?: CodingAgentInput['onProgress']
   ): Promise<void> {
-    if (event.type === 'observation') {
+    if (event.type === 'tool_call_result') {
       try {
-        const json = JSON.parse(event.content);
+        const json = JSON.parse(event.result);
 
         // 检测 BDD 结果（只在第一次检测到时发送）
         if (Array.isArray(json) && json[0]?.feature_id && results.bddFeatures.length === 0) {
           results.bddFeatures = json;
+          // 发送专用的 bdd_generated 事件
+          await this.emitEvent(onProgress, {
+            type: 'bdd_generated',
+            features: json,
+            timestamp: Date.now(),
+          });
+          // 同时发送 phase_complete 事件以保持向后兼容
           await this.emitEvent(onProgress, {
             type: 'phase_complete',
             phase: 'bdd',
             data: json,
+            timestamp: Date.now(),
           });
         }
 
         // 检测架构结果（只在第一次检测到时发送）
         if (Array.isArray(json) && json[0]?.path && json[0]?.type && results.architecture.length === 0) {
           results.architecture = json;
+          // 发送专用的 architecture_generated 事件
+          await this.emitEvent(onProgress, {
+            type: 'architecture_generated',
+            files: json,
+            timestamp: Date.now(),
+          });
+          // 同时发送 phase_complete 事件以保持向后兼容
           await this.emitEvent(onProgress, {
             type: 'phase_complete',
             phase: 'architect',
             data: json,
+            timestamp: Date.now(),
           });
         }
 
         // 检测代码生成结果（只在第一次检测到时发送）
         if (json.files && Array.isArray(json.files) && !results.codeResult) {
           results.codeResult = json;
+          // 发送专用的 code_generated 事件
+          await this.emitEvent(onProgress, {
+            type: 'code_generated',
+            files: json.files,
+            summary: json.summary || '',
+            timestamp: Date.now(),
+          });
+          // 同时发送 phase_complete 事件以保持向后兼容
           await this.emitEvent(onProgress, {
             type: 'phase_complete',
             phase: 'codegen',
             data: json,
+            timestamp: Date.now(),
           });
         }
       } catch { }

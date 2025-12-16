@@ -158,7 +158,7 @@ export class PlannerExecutor {
   }
 
   /**
-   * 运行完整的 Planner + ReAct 工作流
+   * 运行 Planner + ReAct
    */
   async run(input: PlannerInput): Promise<PlannerResult> {
     const { goal, tools, onMessage, onPlanUpdate } = input;
@@ -206,9 +206,15 @@ export class PlannerExecutor {
         // 更新步骤状态
         currentStep.result = stepResult;
         currentStep.status = 'done';
+
+        // 确定此步骤使用的主要工具及其返回类型
+        const mainTool = stepTools.length > 0 ? stepTools[0] : undefined;
+
         plan.history.push({
           stepId: currentStep.id,
           result: stepResult,
+          toolName: mainTool?.name,
+          resultType: mainTool?.returnType || 'text',
           timestamp: new Date(),
         });
         await onPlanUpdate?.(plan);
@@ -220,7 +226,10 @@ export class PlannerExecutor {
           if (refinement.shouldReplan && refinement.updatedSteps) {
             await onMessage?.({
               type: 'thought',
-              content: `重规划中: ${refinement.reasoning}`,
+              thoughtId: `replan_${Date.now()}`,
+              chunk: `重规划中: ${refinement.reasoning}`,
+              isComplete: true,
+              timestamp: Date.now(),
             });
 
             const completedStepIds = new Set(
@@ -252,6 +261,7 @@ export class PlannerExecutor {
       await onMessage?.({
         type: 'error',
         message: `规划器失败: ${errorMessage}`,
+        timestamp: Date.now(),
       });
 
       return {
@@ -387,13 +397,41 @@ export class PlannerExecutor {
     return allTools;
   }
 
-  /** 格式化计划历史作为执行器的上下文 */
+  /** 格式化计划上下文，始终包含原始目标 */
   private formatPlanHistory(plan: Plan): string {
-    if (!plan.history.length) return '';
-    const entries = plan.history.map(entry => {
-      const step = plan.steps.find(s => s.id === entry.stepId);
-      return `步骤 ${entry.stepId} (${step?.description || '未知'}): ${entry.result}`;
-    });
-    return `之前步骤的结果:\n${entries.join('\n\n')}`;
+    // 始终包含原始目标，这是最重要的上下文
+    let context = `## 原始用户需求\n${plan.goal}\n`;
+
+    // 如果有之前步骤的结果，也加入上下文
+    if (plan.history.length > 0) {
+      context += `\n## 之前步骤的执行结果\n`;
+
+      for (const entry of plan.history) {
+        const step = plan.steps.find(s => s.id === entry.stepId);
+        const toolInfo = entry.toolName ? ` (工具: ${entry.toolName})` : '';
+        context += `### 步骤 ${entry.stepId}: ${step?.description || '未知'}${toolInfo}\n`;
+
+        // 根据返回类型动态格式化结果
+        switch (entry.resultType) {
+          case 'json':
+            context += `**结果数据 (JSON 格式，可直接作为参数使用):**\n`;
+            context += `\`\`\`json\n${entry.result}\n\`\`\`\n\n`;
+            break;
+          case 'code':
+            context += `**代码结果:**\n`;
+            context += `\`\`\`\n${entry.result}\n\`\`\`\n\n`;
+            break;
+          case 'markdown':
+            context += `**结果:**\n${entry.result}\n\n`;
+            break;
+          case 'text':
+          default:
+            context += `**结果:** ${entry.result}\n\n`;
+            break;
+        }
+      }
+    }
+
+    return context;
   }
 }

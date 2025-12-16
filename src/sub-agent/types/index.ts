@@ -108,15 +108,47 @@ export interface CodingAgentInput {
 import type { Plan } from '../../types/index';
 
 /**
+ * BDD 生成完成事件
+ */
+export interface BDDGeneratedEvent {
+  type: 'bdd_generated';
+  features: BDDFeature[];
+  timestamp: number;
+}
+
+/**
+ * 架构设计完成事件
+ */
+export interface ArchitectureGeneratedEvent {
+  type: 'architecture_generated';
+  files: ArchitectureFile[];
+  timestamp: number;
+}
+
+/**
+ * 代码生成完成事件
+ */
+export interface CodeGeneratedEvent {
+  type: 'code_generated';
+  files: GeneratedFile[];
+  summary: string;
+  timestamp: number;
+}
+
+/**
  * CodingAgent 事件
  */
 export type CodingAgentEvent =
-  | { type: 'phase_start'; phase: 'bdd' | 'architect' | 'codegen'; message: string }
-  | { type: 'phase_complete'; phase: 'bdd' | 'architect' | 'codegen'; data: any }
-  | { type: 'thought'; content: string }
-  | { type: 'stream'; thoughtId: string; chunk: string; isThought: boolean }
-  | { type: 'plan_update'; plan: Plan }
-  | { type: 'error'; message: string };
+  | { type: 'phase_start'; phase: 'bdd' | 'architect' | 'codegen'; message: string; timestamp: number }
+  | { type: 'phase_complete'; phase: 'bdd' | 'architect' | 'codegen'; data: any; timestamp: number }
+  | { type: 'thought'; thoughtId: string; chunk: string; isComplete: boolean; timestamp: number }
+  | { type: 'tool_call'; toolCallId: string; toolName: string; args: Record<string, any>; timestamp: number }
+  | { type: 'tool_call_result'; toolCallId: string; toolName: string; result: string; success: boolean; duration: number; timestamp: number }
+  | { type: 'plan_update'; plan: Plan; timestamp: number }
+  | { type: 'error'; message: string; timestamp: number }
+  | BDDGeneratedEvent
+  | ArchitectureGeneratedEvent
+  | CodeGeneratedEvent;
 
 /**
  * CodingAgent 结果

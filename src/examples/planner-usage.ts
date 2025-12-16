@@ -25,14 +25,14 @@ const searchTool: Tool = {
   }),
   execute: async (args) => {
     console.log(`    [搜索 API 调用: "${args.query}"]`);
-    
+
     if (args.query.toLowerCase().includes('气候')) {
       return JSON.stringify([
         { title: '2024 气候变化报告', summary: '全球气温上升了 1.2°C...' },
         { title: '可再生能源趋势', summary: '太阳能和风能容量增长了 25%...' },
       ]);
     }
-    
+
     return JSON.stringify([
       { title: `${args.query} 的结果`, summary: '示例搜索结果...' },
     ]);
@@ -101,21 +101,36 @@ ${args.sections.map((s: { heading: string; content: string }) => `## ${s.heading
 
 function handleEvent(event: ReActEvent): void {
   switch (event.type) {
-     case 'stream':
-      // 流式输出：直接打印增量内容（不换行）
+    case 'stream':
+      // 向后兼容: 流式输出
       if (event.isThought) {
         process.stdout.write(event.chunk);
       }
       break;
     case 'thought':
-      console.log(`  💭 ${event.content}`);
+      // 新事件格式: 使用 chunk 字段
+      if (event.chunk) {
+        process.stdout.write(`  💭 ${event.chunk}`);
+      }
+      if (event.isComplete) {
+        console.log();
+      }
+      break;
+    case 'tool_call':
+      console.log(`  🔧 使用工具: ${event.toolName}`);
+      break;
+    case 'tool_call_result':
+      console.log(`  👁️ 结果: ${event.result.slice(0, 100)}...`);
       break;
     case 'action':
+      // 向后兼容
       console.log(`  🔧 使用工具: ${event.toolName}`);
       break;
     case 'observation':
+      // 向后兼容
       console.log(`  👁️ 结果: ${event.content.slice(0, 100)}...`);
       break;
+    case 'final_result':
     case 'final_answer':
       console.log(`  ✅ 步骤完成`);
       break;
@@ -130,9 +145,9 @@ function handlePlanUpdate(plan: Plan): void {
   console.log(`   目标: ${plan.goal}`);
   console.log('   步骤:');
   plan.steps.forEach((step) => {
-    const status = step.status === 'done' ? '✅' : 
-                   step.status === 'in_progress' ? '🔄' : 
-                   step.status === 'skipped' ? '⏭️' : '⏳';
+    const status = step.status === 'done' ? '✅' :
+      step.status === 'in_progress' ? '🔄' :
+        step.status === 'skipped' ? '⏭️' : '⏳';
     console.log(`   ${status} ${step.id}: ${step.description}`);
   });
   console.log('');
@@ -148,7 +163,7 @@ async function main() {
   console.log('='.repeat(60));
 
   const planner = new PlannerExecutor({
-    provider:'tongyi',
+    provider: 'tongyi',
     plannerModel: 'qwen-max',
     executorModel: 'qwen-max',
     maxIterationsPerStep: 5,
@@ -160,7 +175,7 @@ async function main() {
 
   try {
     console.log('\n🎯 开始复杂研究任务...\n');
-    
+
     const result = await planner.run({
       goal: '研究最新的气候变化趋势，并创建一份包含关键发现的简要摘要报告',
       tools: allTools,

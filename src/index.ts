@@ -13,6 +13,7 @@ export { PlannerExecutor } from './core/PlannerExecutor.js';
 export type {
   Tool,
   ToolParameterSchema,
+  ToolReturnType,
   LLMProvider,
   ReActEvent,
   ReActEventHandler,
@@ -34,9 +35,9 @@ export type {
 } from './types/index.js';
 
 // Schemas（高级用法）
-export { 
-  ReActOutputSchema, 
-  ActionSchema, 
-  PlanSchema, 
-  PlanStepSchema 
+export {
+  ReActOutputSchema,
+  ActionSchema,
+  PlanSchema,
+  PlanStepSchema
 } from './types/index.js';

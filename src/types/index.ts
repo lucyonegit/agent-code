@@ -17,6 +17,11 @@ import { z } from 'zod';
 export type ToolParameterSchema = z.ZodObject<any>;
 
 /**
+ * 工具返回类型
+ */
+export type ToolReturnType = 'json' | 'text' | 'markdown' | 'code';
+
+/**
  * 工具定义接口
  * 表示 ReAct agent 可以使用的单个工具
  */
@@ -31,6 +36,16 @@ export interface Tool {
   parameters: ToolParameterSchema;
 
   /** 
+   * 工具返回的数据类型
+   * - 'json': 结构化 JSON 数据
+   * - 'text': 纯文本
+   * - 'markdown': Markdown 格式
+   * - 'code': 代码片段
+   * 默认: 'text'
+   */
+  returnType?: ToolReturnType;
+
+  /** 
    * 使用给定参数执行工具
    * @param args - 符合参数 schema 的参数对象
    * @returns 工具输出的字符串或 Promise<string>
@@ -43,36 +58,49 @@ export interface Tool {
 // ============================================================================
 
 /**
- * Agent 产生思考时发出的事件
+ * Agent 产生思考时发出的事件（流式）
  */
 export interface ThoughtEvent {
   type: 'thought';
-  content: string;
+  thoughtId: string;      // 唯一标识符，用于前端聚合同一轮思考
+  chunk: string;          // 实时流式内容片段
+  isComplete: boolean;    // 是否为最后一个片段
+  timestamp: number;      // 时间戳
 }
 
 /**
  * Agent 决定使用工具时发出的事件
  */
-export interface ActionEvent {
-  type: 'action';
-  toolName: string;
-  args: Record<string, any>;
+export interface ToolCallEvent {
+  type: 'tool_call';
+  toolCallId: string;     // 唯一标识符，用于匹配后续结果
+  toolName: string;       // 工具名称
+  args: Record<string, any>; // 调用参数
+  timestamp: number;
 }
 
 /**
  * 工具返回结果后发出的事件
  */
-export interface ObservationEvent {
-  type: 'observation';
-  content: string;
+export interface ToolCallResultEvent {
+  type: 'tool_call_result';
+  toolCallId: string;     // 对应的 toolCallId
+  toolName: string;       // 工具名称
+  result: string;         // 工具返回结果
+  success: boolean;       // 是否成功
+  duration: number;       // 执行耗时(ms)
+  timestamp: number;
 }
 
 /**
  * Agent 产生最终答案时发出的事件
  */
-export interface FinalAnswerEvent {
-  type: 'final_answer';
-  content: string;
+export interface FinalResultEvent {
+  type: 'final_result';
+  content: string;        // 最终答案内容
+  totalDuration: number;  // 总耗时(ms)
+  iterationCount: number; // 迭代次数
+  timestamp: number;
 }
 
 /**
@@ -82,18 +110,59 @@ export interface ErrorEvent {
   type: 'error';
   message: string;
   details?: any;
+  timestamp: number;
 }
 
 /**
- * 流式输出的增量内容事件
+ * 步骤开始事件（Planner 专用）
  */
+export interface StepStartEvent {
+  type: 'step_start';
+  stepId: string;
+  description: string;
+  timestamp: number;
+}
+
+/**
+ * 步骤完成事件（Planner 专用）
+ */
+export interface StepCompleteEvent {
+  type: 'step_complete';
+  stepId: string;
+  result: string;
+  success: boolean;
+  duration: number;
+  timestamp: number;
+}
+
+// ============================================================================
+// 向后兼容类型（保留旧接口别名）
+// ============================================================================
+
+/** @deprecated 使用 ToolCallEvent */
+export interface ActionEvent {
+  type: 'action';
+  toolName: string;
+  args: Record<string, any>;
+}
+
+/** @deprecated 使用 ToolCallResultEvent */
+export interface ObservationEvent {
+  type: 'observation';
+  content: string;
+}
+
+/** @deprecated 使用 FinalResultEvent */
+export interface FinalAnswerEvent {
+  type: 'final_answer';
+  content: string;
+}
+
+/** @deprecated 使用 ThoughtEvent */
 export interface StreamEvent {
   type: 'stream';
-  /** 本次迭代的唯一标识，用于 UI 合并同一迭代的 thought */
   thoughtId: string;
-  /** 增量内容 */
   chunk: string;
-  /** 是否是思考内容的流式输出 */
   isThought: boolean;
 }
 
@@ -102,10 +171,16 @@ export interface StreamEvent {
  */
 export type ReActEvent =
   | ThoughtEvent
+  | ToolCallEvent
+  | ToolCallResultEvent
+  | FinalResultEvent
+  | ErrorEvent
+  | StepStartEvent
+  | StepCompleteEvent
+  // 向后兼容
   | ActionEvent
   | ObservationEvent
   | FinalAnswerEvent
-  | ErrorEvent
   | StreamEvent;
 
 /**
@@ -272,6 +347,10 @@ export interface Plan {
   history: Array<{
     stepId: string;
     result: string;
+    /** 产生此结果的工具名称 */
+    toolName?: string;
+    /** 结果的数据类型 */
+    resultType?: ToolReturnType;
     timestamp: Date;
   }>;
 }

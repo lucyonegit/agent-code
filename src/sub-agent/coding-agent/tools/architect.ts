@@ -42,6 +42,7 @@ export function createArchitectTool(config: LLMConfig): Tool {
   return {
     name: 'design_architecture',
     description: '基于 BDD 场景设计项目文件架构。返回架构文件数组。',
+    returnType: 'json',
     parameters: z.object({
       bdd_scenarios: z.string().describe('BDD 场景 JSON 字符串'),
     }),

@@ -89,27 +89,46 @@ const searchTool: Tool = {
 
 /**
  * 自定义事件处理器，用于显示执行进度
- * 支持流式输出
+ * 支持流式输出和新事件格式
  */
 function handleEvent(event: ReActEvent): void {
   switch (event.type) {
     case 'stream':
-      // 流式输出：直接打印增量内容（不换行）
+      // 向后兼容: 流式输出
       if (event.isThought) {
         process.stdout.write(event.chunk);
       }
       break;
     case 'thought':
-      console.log('\n💭 思考:', event.content);
+      // 新事件格式: 使用 chunk 字段
+      if (event.chunk) {
+        process.stdout.write(event.chunk);
+      }
+      if (event.isComplete) {
+        console.log();  // 思考完成后换行
+      }
+      break;
+    case 'tool_call':
+      console.log(`\n🔧 工具调用: ${event.toolName}`);
+      console.log('   参数:', JSON.stringify(event.args, null, 2));
+      break;
+    case 'tool_call_result':
+      console.log(`\n👁️ 结果 [${event.success ? '成功' : '失败'}] (${event.duration}ms):`, event.result);
       break;
     case 'action':
+      // 向后兼容
       console.log(`\n🔧 动作: ${event.toolName}`);
       console.log('   参数:', JSON.stringify(event.args, null, 2));
       break;
     case 'observation':
+      // 向后兼容
       console.log('\n👁️ 观察:', event.content);
       break;
+    case 'final_result':
+      console.log('\n✅ 最终答案:', event.content);
+      break;
     case 'final_answer':
+      // 向后兼容
       console.log('\n✅ 最终答案:', event.content);
       break;
     case 'error':
@@ -129,7 +148,7 @@ async function main() {
 
   // 创建执行器（启用流式输出）
   const executor = new ReActExecutor({
-    provider:'tongyi',
+    provider: 'tongyi',
     model: 'qwen-max',
     maxIterations: 20,
     streaming: true,  // 启用流式输出

@@ -34,6 +34,7 @@ export function createCodeGenTool(config: LLMConfig): Tool {
   return {
     name: 'generate_code',
     description: '基于 BDD 场景、架构设计和组件文档生成项目代码',
+    returnType: 'json',
     parameters: z.object({
       bdd_scenarios: z.string().describe('BDD 场景 JSON'),
       architecture: z.string().describe('架构设计 JSON'),

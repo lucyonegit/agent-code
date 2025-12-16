@@ -111,6 +111,7 @@ export class ReActExecutor {
    */
   async run(input: ReActInput): Promise<string> {
     const { input: userInput, context, tools, onMessage } = input;
+    const startTime = Date.now();
 
     const llm = createLLM({
       model: this.config.model,
@@ -150,22 +151,25 @@ export class ReActExecutor {
     const userMessage = this.config.userMessageTemplate(userInput, toolDescriptions, context);
     messages.push(new HumanMessage(userMessage));
 
-    // 跟踪迭代历史
+    // 跟踪迭代历史和计数
     const iterationHistory: string[] = [];
+    let completedIterations = 0;
 
     console.log('ReAct Executor 循环开始...');
 
     // 主 ReAct 循环
     for (let iteration = 1; iteration <= this.config.maxIterations; iteration++) {
-
-      console.log(`第${iteration}循环开始...`);
+      completedIterations = iteration;
+      console.log(`第${iteration}循环开始... (当前消息数: ${messages.length})`);
       // 为本次迭代生成唯一的 thoughtId
       const iterationId = `thought_${Date.now()}_${iteration}`;
 
       try {
         if (this.config.streaming) {
           // === 流式模式 ===
-          const result = await this.streamIteration(llmWithTools, messages, tools, onMessage, iterationId);
+          const result = await this.streamIteration(
+            llmWithTools, messages, tools, onMessage, iterationId, startTime, iteration
+          );
 
           if (result.isFinalAnswer) {
             return result.content;
@@ -182,7 +186,10 @@ export class ReActExecutor {
           if (content) {
             await this.emitEvent(onMessage, {
               type: 'thought',
-              content,
+              thoughtId: iterationId,
+              chunk: content,
+              isComplete: true,
+              timestamp: Date.now(),
             });
           }
 
@@ -200,10 +207,13 @@ export class ReActExecutor {
                 // 提取最终答案
                 const answer = (finalAnswerCall.args as { answer?: string }).answer || content;
 
-                // 发出 final_answer 事件
+                // 发出 final_result 事件
                 await this.emitEvent(onMessage, {
-                  type: 'final_answer',
+                  type: 'final_result',
                   content: answer,
+                  totalDuration: Date.now() - startTime,
+                  iterationCount: iteration,
+                  timestamp: Date.now(),
                 });
                 return answer;
               }
@@ -211,32 +221,50 @@ export class ReActExecutor {
 
             // 处理普通工具调用
             for (const call of response.tool_calls) {
+              const toolCallId = call.id || `call_${Date.now()}`;
+              const toolStartTime = Date.now();
+
+              // 发出 tool_call 事件
               await this.emitEvent(onMessage, {
-                type: 'action',
+                type: 'tool_call',
+                toolCallId,
                 toolName: call.name,
                 args: call.args,
+                timestamp: toolStartTime,
               });
 
               // 执行工具
               const tool = allTools.find(t => t.name === call.name);
               let observation: string;
+              let success = true;
 
               if (!tool) {
                 observation = `工具 "${call.name}" 未找到`;
-                await this.emitEvent(onMessage, { type: 'error', message: observation });
+                success = false;
+                await this.emitEvent(onMessage, { type: 'error', message: observation, timestamp: Date.now() });
               } else {
                 try {
                   observation = await tool.execute(call.args);
                 } catch (error) {
                   observation = `工具执行失败: ${error instanceof Error ? error.message : '未知错误'}`;
-                  await this.emitEvent(onMessage, { type: 'error', message: observation });
+                  success = false;
+                  await this.emitEvent(onMessage, { type: 'error', message: observation, timestamp: Date.now() });
                 }
               }
 
-              await this.emitEvent(onMessage, { type: 'observation', content: observation });
+              // 发出 tool_call_result 事件
+              await this.emitEvent(onMessage, {
+                type: 'tool_call_result',
+                toolCallId,
+                toolName: call.name,
+                result: observation,
+                success,
+                duration: Date.now() - toolStartTime,
+                timestamp: Date.now(),
+              });
 
               messages.push(new ToolMessage({
-                tool_call_id: call.id || 'call_id',
+                tool_call_id: toolCallId,
                 content: observation,
               }));
 
@@ -250,6 +278,7 @@ export class ReActExecutor {
         await this.emitEvent(onMessage, {
           type: 'error',
           message: `第 ${iteration} 次迭代失败: ${errorMessage}`,
+          timestamp: Date.now(),
         });
         messages.push(new HumanMessage(`发生错误: ${errorMessage}\n请继续尝试。`));
       }
@@ -257,7 +286,13 @@ export class ReActExecutor {
 
     // 达到最大迭代次数
     const fallbackAnswer = `已达到最大迭代次数 (${this.config.maxIterations})。\n\n${iterationHistory.join('\n\n')}`;
-    await this.emitEvent(onMessage, { type: 'final_answer', content: fallbackAnswer });
+    await this.emitEvent(onMessage, {
+      type: 'final_result',
+      content: fallbackAnswer,
+      totalDuration: Date.now() - startTime,
+      iterationCount: completedIterations,
+      timestamp: Date.now(),
+    });
     return fallbackAnswer;
   }
 
@@ -271,7 +306,9 @@ export class ReActExecutor {
     messages: BaseMessage[],
     tools: Tool[],
     onMessage: ReActInput['onMessage'],
-    iterationId: string
+    iterationId: string,
+    startTime: number,
+    iteration: number
   ): Promise<{ isFinalAnswer: boolean; content: string }> {
     const stream = await llm.stream(messages);
 
@@ -284,20 +321,20 @@ export class ReActExecutor {
       ? [...tools, this.config.finalAnswerTool]
       : tools;
 
-    // === 流式处理循环 ===
+    // 处理流式数据Thought & ToolCall
     for await (const chunk of stream) {
       // 阶段 1: Thought 流式输出
       if (chunk.content) {
         const text = typeof chunk.content === 'string' ? chunk.content : '';
         if (text) {
-          console.log(`thought: ${text}`);
+          process.stdout.write(text);
           accumulatedContent += text;
-          // 实时推送 thought，附带 thoughtId
           await this.emitEvent(onMessage, {
-            type: 'stream',
+            type: 'thought',
             thoughtId: iterationId,
             chunk: text,
-            isThought: true,
+            isComplete: false,
+            timestamp: Date.now(),
           });
         }
       }
@@ -311,7 +348,15 @@ export class ReActExecutor {
       }
     }
 
-    // === 流结束后处理 ===
+    if (accumulatedContent) {
+      await this.emitEvent(onMessage, {
+        type: 'thought',
+        thoughtId: iterationId,
+        chunk: '',
+        isComplete: true,
+        timestamp: Date.now(),
+      });
+    }
 
     // 构建 AI 消息并添加到历史
     const toolCalls = toLangChainToolCalls(accumulatedToolCalls);
@@ -322,64 +367,74 @@ export class ReActExecutor {
     messages.push(aiMessage);
 
     // 处理 Action
-    console.log(`是否有工具调用: ${accumulatedToolCalls.length > 0}`);
     if (accumulatedToolCalls.length > 0) {
       // 检查是否调用了最终答案工具
-      if (this.config.finalAnswerTool) {
-        const finalAnswerCall = toolCalls.find(
-          call => call.name === this.config.finalAnswerTool!.name
-        );
+      const finalAnswerCall = toolCalls.find(
+        call => call.name === this.config.finalAnswerTool!.name
+      );
+      if (finalAnswerCall) {
+        // 提取最终答案
+        const answer = (finalAnswerCall.args as { answer?: string }).answer || accumulatedContent;
 
-        console.log(`是否有最终答案调用: ${!!finalAnswerCall}`);
-        if (finalAnswerCall) {
-          // 提取最终答案
-          const answer = (finalAnswerCall.args as { answer?: string }).answer || accumulatedContent;
+        // 发出 final_result 事件
+        await this.emitEvent(onMessage, {
+          type: 'final_result',
+          content: answer,
+          totalDuration: Date.now() - startTime,
+          iterationCount: iteration,
+          timestamp: Date.now(),
+        });
 
-          // 发出 final_answer 事件
-          await this.emitEvent(onMessage, {
-            type: 'final_answer',
-            content: answer,
-          });
-
-          return { isFinalAnswer: true, content: answer };
-        }
+        return { isFinalAnswer: true, content: answer };
       }
 
       // 处理普通工具调用
-      console.log(`是否有普通工具调用: ${toolCalls.length > 0}`);
       for (const call of toolCalls) {
-        // 发出 action 事件
+        const toolCallId = call.id || `call_${Date.now()}`;
+        const toolStartTime = Date.now();
+
+        // 发出 tool_call 事件
         await this.emitEvent(onMessage, {
-          type: 'action',
+          type: 'tool_call',
+          toolCallId,
           toolName: call.name,
           args: call.args,
+          timestamp: toolStartTime,
         });
 
         // 执行工具
         const tool = allTools.find(t => t.name === call.name);
         let observation: string;
+        let success = true;
 
         if (!tool) {
           observation = `工具 "${call.name}" 未找到。可用工具: ${allTools.map(t => t.name).join(', ')}`;
-          await this.emitEvent(onMessage, { type: 'error', message: observation });
+          success = false;
+          await this.emitEvent(onMessage, { type: 'error', message: observation, timestamp: Date.now() });
         } else {
           try {
             observation = await tool.execute(call.args);
           } catch (error) {
             observation = `工具执行失败: ${error instanceof Error ? error.message : '未知错误'}`;
-            await this.emitEvent(onMessage, { type: 'error', message: observation });
+            success = false;
+            await this.emitEvent(onMessage, { type: 'error', message: observation, timestamp: Date.now() });
           }
         }
 
-        // 发出 observation 事件
+        // 发出 tool_call_result 事件
         await this.emitEvent(onMessage, {
-          type: 'observation',
-          content: observation,
+          type: 'tool_call_result',
+          toolCallId,
+          toolName: call.name,
+          result: observation,
+          success,
+          duration: Date.now() - toolStartTime,
+          timestamp: Date.now(),
         });
 
         // 添加工具结果到消息历史
         messages.push(new ToolMessage({
-          tool_call_id: call.id,
+          tool_call_id: toolCallId,
           content: observation,
         }));
       }
