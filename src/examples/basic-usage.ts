@@ -93,12 +93,6 @@ const searchTool: Tool = {
  */
 function handleEvent(event: ReActEvent): void {
   switch (event.type) {
-    case 'stream':
-      // 向后兼容: 流式输出
-      if (event.isThought) {
-        process.stdout.write(event.chunk);
-      }
-      break;
     case 'thought':
       // 新事件格式: 使用 chunk 字段
       if (event.chunk) {
@@ -115,20 +109,7 @@ function handleEvent(event: ReActEvent): void {
     case 'tool_call_result':
       console.log(`\n👁️ 结果 [${event.success ? '成功' : '失败'}] (${event.duration}ms):`, event.result);
       break;
-    case 'action':
-      // 向后兼容
-      console.log(`\n🔧 动作: ${event.toolName}`);
-      console.log('   参数:', JSON.stringify(event.args, null, 2));
-      break;
-    case 'observation':
-      // 向后兼容
-      console.log('\n👁️ 观察:', event.content);
-      break;
     case 'final_result':
-      console.log('\n✅ 最终答案:', event.content);
-      break;
-    case 'final_answer':
-      // 向后兼容
       console.log('\n✅ 最终答案:', event.content);
       break;
     case 'error':

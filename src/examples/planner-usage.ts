@@ -101,12 +101,6 @@ ${args.sections.map((s: { heading: string; content: string }) => `## ${s.heading
 
 function handleEvent(event: ReActEvent): void {
   switch (event.type) {
-    case 'stream':
-      // 向后兼容: 流式输出
-      if (event.isThought) {
-        process.stdout.write(event.chunk);
-      }
-      break;
     case 'thought':
       // 新事件格式: 使用 chunk 字段
       if (event.chunk) {
@@ -122,16 +116,7 @@ function handleEvent(event: ReActEvent): void {
     case 'tool_call_result':
       console.log(`  👁️ 结果: ${event.result.slice(0, 100)}...`);
       break;
-    case 'action':
-      // 向后兼容
-      console.log(`  🔧 使用工具: ${event.toolName}`);
-      break;
-    case 'observation':
-      // 向后兼容
-      console.log(`  👁️ 结果: ${event.content.slice(0, 100)}...`);
-      break;
     case 'final_result':
-    case 'final_answer':
       console.log(`  ✅ 步骤完成`);
       break;
     case 'error':
