@@ -58,7 +58,7 @@ export const CODING_AGENT_PROMPTS = {
   }
 ]
 \`\`\`
-不要包含额外文本或 Markdown。`,
+不要包含额外文本或 Markdown。JSON数组的描述字段都用中文`,
 
   ARCHITECT_GENERATOR_PROMPT: `
   **System Prompt (系统角色与指令)**

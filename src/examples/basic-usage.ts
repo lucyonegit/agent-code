@@ -10,6 +10,7 @@
 
 import { z } from 'zod';
 import { ReActExecutor, type Tool, type ReActEvent } from '../index.js';
+import { createRagSearchTool, createGetComponentListTool } from '../sub-agent/coding-agent/tools/rag.js';
 
 // ============================================================================
 // 步骤 1：定义工具
@@ -155,6 +156,22 @@ async function main() {
     const result = await executor.run({
       input: '搜索东京的人口，然后计算其 10% 是多少。',
       tools: [searchTool, calculatorTool],
+      onMessage: handleEvent,
+    });
+    console.log('\n📋 结果:', result);
+  } catch (error) {
+    console.error('执行失败:', error);
+  }
+
+  // 示例 3：RAG 组件查询
+  console.log('\n\n--- 示例 3：RAG 组件库查询 ---');
+  try {
+    const ragSearchTool = createRagSearchTool();
+    const getComponentListTool = createGetComponentListTool();
+
+    const result = await executor.run({
+      input: '查询一下有哪些可用的组件，然后搜索 Button 组件的使用方法',
+      tools: [ragSearchTool, getComponentListTool],
       onMessage: handleEvent,
     });
     console.log('\n📋 结果:', result);

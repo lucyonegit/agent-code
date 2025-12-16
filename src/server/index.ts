@@ -14,6 +14,7 @@ import { PlannerExecutor } from '../core/PlannerExecutor.js';
 import { CodingAgent } from '../sub-agent/coding-agent/index.js';
 import { type Tool, type ReActEvent, type Plan } from '../types/index.js';
 import type { CodingAgentEvent } from '../sub-agent/types/index.js';
+import { createRagSearchTool, createGetComponentListTool } from '../sub-agent/coding-agent/tools/rag.js';
 import { z } from 'zod';
 
 // ============================================================================
@@ -21,7 +22,7 @@ import { z } from 'zod';
 // ============================================================================
 
 const PORT = 3001;
-const API_KEY = 'sk-2da524e57ee64485ab4208430ab35f4d';
+const API_KEY = 'sk-20634a533ca64454bae911b6495c1553';
 
 // ============================================================================
 // 预定义工具（示例）
@@ -75,6 +76,9 @@ const AVAILABLE_TOOLS: Record<string, Tool> = {
       ]);
     },
   },
+  // RAG 工具
+  search_component_docs: createRagSearchTool(),
+  get_component_list: createGetComponentListTool(),
 };
 
 // ============================================================================

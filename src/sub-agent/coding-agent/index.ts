@@ -111,6 +111,16 @@ export class CodingAgent {
     };
 
     try {
+      // 发送友好的开场提示
+      const greeting = await this.generateGreeting(requirement);
+      await this.emitEvent(onProgress, {
+        type: 'thought',
+        thoughtId: `greeting_${Date.now()}`,
+        chunk: greeting,
+        isComplete: true,
+        timestamp: Date.now(),
+      });
+
       await this.plannerExecutor.run({
         goal: `${requirement}`,
         tools,
@@ -277,5 +287,27 @@ export class CodingAgent {
    */
   private async emitEvent(handler: CodingAgentInput['onProgress'], event: CodingAgentEvent): Promise<void> {
     if (handler) await handler(event);
+  }
+
+  /**
+   * 使用 LLM 生成友好的开场提示
+   */
+  private async generateGreeting(requirement: string): Promise<string> {
+    const { createLLM } = await import('../../core/BaseLLM.js');
+    const { HumanMessage, SystemMessage } = await import('@langchain/core/messages');
+
+    const llm = createLLM({
+      model: this.config.model,
+      provider: this.config.provider,
+      apiKey: this.config.apiKey,
+      baseUrl: this.config.baseUrl,
+    });
+
+    const response = await llm.invoke([
+      new SystemMessage('你是一个友好的编程助手。根据用户的需求，生成一条简短的中文确认消息（20字以内），告诉用户你即将开始为他们做什么。语气要友好专业，可以使用1个emoji。只返回确认消息本身，不要有其他内容。示例："好的，我来帮您生成登录页 ✨"'),
+      new HumanMessage(`用户需求: ${requirement}`),
+    ]);
+
+    return (response.content as string).trim();
   }
 }

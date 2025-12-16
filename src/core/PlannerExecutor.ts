@@ -183,6 +183,16 @@ export class PlannerExecutor {
         // 获取此步骤的工具
         const stepTools = this.getToolsForStep(currentStep, tools);
 
+        // 生成并发送友好提示
+        const friendlyMessage = await this.generateFriendlyMessage(currentStep.description);
+        await onMessage?.({
+          type: 'thought',
+          thoughtId: `step_hint_${currentStep.id}`,
+          chunk: friendlyMessage,
+          isComplete: true,
+          timestamp: Date.now(),
+        });
+
         // 为此步骤创建 ReActExecutor
         const executor = new ReActExecutor({
           model: this.config.executorModel,
@@ -219,8 +229,17 @@ export class PlannerExecutor {
         });
         await onPlanUpdate?.(plan);
 
-        // 动态重规划
-        if (rePlanAttempts < this.config.maxRePlanAttempts) {
+        // 动态重规划：仅在步骤执行失败时触发
+        const stepFailed = this.isStepFailed(stepResult);
+        if (stepFailed && rePlanAttempts < this.config.maxRePlanAttempts) {
+          await onMessage?.({
+            type: 'thought',
+            thoughtId: `replan_detect_${Date.now()}`,
+            chunk: `检测到步骤执行失败，尝试重新规划...`,
+            isComplete: true,
+            timestamp: Date.now(),
+          });
+
           const refinement = await this.refinePlan(plan, stepResult, tools);
 
           if (refinement.shouldReplan && refinement.updatedSteps) {
@@ -238,8 +257,8 @@ export class PlannerExecutor {
 
             plan.steps = [
               ...plan.steps.filter(s => completedStepIds.has(s.id)),
-              ...(refinement.updatedSteps || []).map(s => ({
-                id: s.id,
+              ...(refinement.updatedSteps || []).map((s, index) => ({
+                id: s.id || `step_replan_${completedStepIds.size + index + 1}`,
                 description: s.description,
                 status: s.status || 'pending' as const,
                 requiredTools: s.requiredTools ?? undefined,
@@ -395,6 +414,38 @@ export class PlannerExecutor {
       return allTools.filter(t => step.requiredTools!.includes(t.name));
     }
     return allTools;
+  }
+
+  /** 生成友好的步骤提示消息 */
+  private async generateFriendlyMessage(stepDescription: string): Promise<string> {
+    const llm = createLLM({
+      model: this.config.plannerModel,
+      provider: this.config.provider,
+      apiKey: this.config.apiKey,
+      baseUrl: this.config.baseUrl,
+    });
+
+    const response = await llm.invoke([
+      new SystemMessage('你是一个友好的助手。根据给定的任务描述，生成一条简短的中文提示消息（15字以内），告诉用户你正在做什么。语气要轻松友好，可以适当使用emoji。只返回提示消息本身，不要有其他内容。'),
+      new HumanMessage(`任务: ${stepDescription}`),
+    ]);
+
+    return (response.content as string).trim();
+  }
+
+  /** 检测步骤执行是否失败 */
+  private isStepFailed(stepResult: string): boolean {
+    const errorPatterns = [
+      /error/i,
+      /failed/i,
+      /failure/i,
+      /无法/,
+      /失败/,
+      /错误/,
+      /异常/,
+      /exception/i,
+    ];
+    return errorPatterns.some(pattern => pattern.test(stepResult));
   }
 
   /** 格式化计划上下文，始终包含原始目标 */
