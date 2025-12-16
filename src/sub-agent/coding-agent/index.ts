@@ -97,7 +97,10 @@ export class CodingAgent {
     const tools: Tool[] = [
       createBDDTool(llmConfig),
       createArchitectTool(llmConfig),
-      createCodeGenTool(llmConfig),
+      createCodeGenTool(llmConfig, async (event) => {
+        // 将工作流事件转发给前端（复用 tool_call / tool_call_result 格式）
+        await this.emitEvent(onProgress, event as unknown as CodingAgentEvent);
+      }),
     ];
 
     // 存储中间结果
