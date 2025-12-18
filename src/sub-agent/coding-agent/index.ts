@@ -114,10 +114,9 @@ export class CodingAgent {
       // 发送友好的开场提示
       const greeting = await this.generateGreeting(requirement);
       await this.emitEvent(onProgress, {
-        type: 'thought',
-        thoughtId: `greeting_${Date.now()}`,
-        chunk: greeting,
-        isComplete: true,
+        type: 'normal_message',
+        messageId: `greeting_${Date.now()}`,
+        content: greeting,
         timestamp: Date.now(),
       });
 

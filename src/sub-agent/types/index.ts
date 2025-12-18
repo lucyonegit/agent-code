@@ -142,6 +142,7 @@ export type CodingAgentEvent =
   | { type: 'phase_start'; phase: 'bdd' | 'architect' | 'codegen'; message: string; timestamp: number }
   | { type: 'phase_complete'; phase: 'bdd' | 'architect' | 'codegen'; data: any; timestamp: number }
   | { type: 'thought'; thoughtId: string; chunk: string; isComplete: boolean; timestamp: number }
+  | { type: 'normal_message'; messageId: string; content: string; timestamp: number }
   | { type: 'tool_call'; toolCallId: string; toolName: string; args: Record<string, any>; timestamp: number }
   | { type: 'tool_call_result'; toolCallId: string; toolName: string; result: string; success: boolean; duration: number; timestamp: number }
   | { type: 'plan_update'; plan: Plan; timestamp: number }

@@ -114,6 +114,16 @@ export interface ErrorEvent {
 }
 
 /**
+ * 普通消息事件（用于友好提示等普通对话消息）
+ */
+export interface NormalMessageEvent {
+  type: 'normal_message';
+  messageId: string;      // 唯一标识符
+  content: string;        // 消息内容
+  timestamp: number;
+}
+
+/**
  * 步骤开始事件（Planner 专用）
  */
 export interface StepStartEvent {
@@ -175,6 +185,7 @@ export type ReActEvent =
   | ToolCallResultEvent
   | FinalResultEvent
   | ErrorEvent
+  | NormalMessageEvent
 /**
  * 处理 ReAct 事件的回调函数类型
  */

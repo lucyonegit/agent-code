@@ -186,10 +186,9 @@ export class PlannerExecutor {
         // 生成并发送友好提示
         const friendlyMessage = await this.generateFriendlyMessage(currentStep.description);
         await onMessage?.({
-          type: 'thought',
-          thoughtId: `step_hint_${currentStep.id}`,
-          chunk: friendlyMessage,
-          isComplete: true,
+          type: 'normal_message',
+          messageId: `step_hint_${currentStep.id}`,
+          content: friendlyMessage,
           timestamp: Date.now(),
         });
 
@@ -228,47 +227,6 @@ export class PlannerExecutor {
           timestamp: new Date(),
         });
         await onPlanUpdate?.(plan);
-
-        // 动态重规划：仅在步骤执行失败时触发
-        const stepFailed = this.isStepFailed(stepResult);
-        if (stepFailed && rePlanAttempts < this.config.maxRePlanAttempts) {
-          await onMessage?.({
-            type: 'thought',
-            thoughtId: `replan_detect_${Date.now()}`,
-            chunk: `检测到步骤执行失败，尝试重新规划...`,
-            isComplete: true,
-            timestamp: Date.now(),
-          });
-
-          const refinement = await this.refinePlan(plan, stepResult, tools);
-
-          if (refinement.shouldReplan && refinement.updatedSteps) {
-            await onMessage?.({
-              type: 'thought',
-              thoughtId: `replan_${Date.now()}`,
-              chunk: `重规划中: ${refinement.reasoning}`,
-              isComplete: true,
-              timestamp: Date.now(),
-            });
-
-            const completedStepIds = new Set(
-              plan.steps.filter(s => s.status === 'done').map(s => s.id)
-            );
-
-            plan.steps = [
-              ...plan.steps.filter(s => completedStepIds.has(s.id)),
-              ...(refinement.updatedSteps || []).map((s, index) => ({
-                id: s.id || `step_replan_${completedStepIds.size + index + 1}`,
-                description: s.description,
-                status: s.status || 'pending' as const,
-                requiredTools: s.requiredTools ?? undefined,
-              })),
-            ];
-
-            rePlanAttempts++;
-            await onPlanUpdate?.(plan);
-          }
-        }
       }
 
       // 生成最终响应
@@ -433,20 +391,7 @@ export class PlannerExecutor {
     return (response.content as string).trim();
   }
 
-  /** 检测步骤执行是否失败 */
-  private isStepFailed(stepResult: string): boolean {
-    const errorPatterns = [
-      /error/i,
-      /failed/i,
-      /failure/i,
-      /无法/,
-      /失败/,
-      /错误/,
-      /异常/,
-      /exception/i,
-    ];
-    return errorPatterns.some(pattern => pattern.test(stepResult));
-  }
+
 
   /** 格式化计划上下文，始终包含原始目标 */
   private formatPlanHistory(plan: Plan): string {
