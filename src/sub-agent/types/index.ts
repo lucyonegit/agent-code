@@ -76,6 +76,7 @@ export interface GeneratedFile {
  */
 export interface CodeGenResult {
   files: GeneratedFile[];
+  tree?: any;
   summary: string;
 }
 
@@ -93,6 +94,8 @@ export interface CodingAgentConfig {
   baseUrl?: string;
   /** 是否启用流式输出 */
   streaming?: boolean;
+  /** 是否在代码生成阶段使用 RAG（获取组件文档） */
+  useRag?: boolean;
 }
 
 /**
@@ -131,6 +134,7 @@ export interface ArchitectureGeneratedEvent {
 export interface CodeGeneratedEvent {
   type: 'code_generated';
   files: GeneratedFile[];
+  tree?: any;
   summary: string;
   timestamp: number;
 }
@@ -160,6 +164,7 @@ export interface CodingAgentResult {
   bddFeatures?: BDDFeature[];
   architecture?: ArchitectureFile[];
   generatedFiles?: GeneratedFile[];
+  tree?: any;
   summary?: string;
   error?: string;
 }

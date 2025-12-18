@@ -269,7 +269,8 @@ async function handleCodingRequest(
 
   try {
     const body = await parseBody(req);
-    const { requirement } = body;
+    const { requirement, useRag = false } = body;
+    console.log(`[CodingRequest] Starting: "${requirement.slice(0, 50)}...", useRag: ${useRag}`);
 
     if (!requirement) {
       sendSSE(res, 'error', { message: '缺少 requirement 参数' });
@@ -282,24 +283,28 @@ async function handleCodingRequest(
       model: 'qwen-max',
       provider: 'tongyi',
       apiKey: API_KEY,
+      useRag,
     });
 
     // 执行并流式返回结果
     const result = await agent.run({
       requirement,
       onProgress: (event: CodingAgentEvent) => {
+        console.log(`[CodingRequest] Progress: ${event.type} ${event.type === 'phase_start' ? (event as any).phase : ''}`);
         // 直接发送事件，前端会根据类型处理
         sendSSE(res, event.type, event);
       },
     });
 
     // 发送完成事件
+    console.log(`[CodingRequest] Done: ${result.success}`);
     sendSSE(res, 'coding_done', {
       type: 'coding_done',
       success: result.success,
       bddFeatures: result.bddFeatures,
       architecture: result.architecture,
       generatedFiles: result.generatedFiles,
+      tree: result.tree,
       summary: result.summary,
       error: result.error,
     });

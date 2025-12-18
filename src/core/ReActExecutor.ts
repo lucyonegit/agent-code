@@ -282,6 +282,11 @@ export class ReActExecutor {
         });
         messages.push(new HumanMessage(`发生错误: ${errorMessage}\n请继续尝试。`));
       }
+
+      // 防止无限循环：如果连续多次没有工具调用且输出为空
+      if (!this.config.streaming && !messages[messages.length - 1].content && !(messages[messages.length - 1] as AIMessage).tool_calls?.length) {
+        break;
+      }
     }
 
     // 达到最大迭代次数

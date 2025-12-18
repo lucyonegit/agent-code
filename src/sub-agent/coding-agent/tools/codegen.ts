@@ -12,6 +12,8 @@ import { CODING_AGENT_PROMPTS } from '../config/prompt';
 import type { Tool, LLMProvider } from '../../../types/index';
 import type { BaseChatModel } from '@langchain/core/language_models/chat_models';
 import { searchComponentDocs, getComponentList } from './rag';
+import { processProjectForWebContainer } from '../utils/project-merger';
+import baseTemplate from '../../../constants/baseTemplate.json';
 
 /**
  * 代码生成结果 Schema
@@ -20,6 +22,7 @@ const CodeGenResultSchema = z.object({
   files: z.array(z.object({
     path: z.string().describe('文件路径'),
     content: z.string().describe('文件内容'),
+    npm_dependencies: z.record(z.string()).optional().describe('该文件特定的 npm 依赖'),
   })),
   summary: z.string().describe('生成摘要'),
 });
@@ -29,6 +32,7 @@ export interface LLMConfig {
   provider: LLMProvider;
   apiKey?: string;
   baseUrl?: string;
+  useRag?: boolean;
 }
 
 /**
@@ -155,7 +159,7 @@ function summarizeResult(nodeName: string, result: Partial<CodeGenStateType>): a
 /**
  * 创建代码生成工作流
  */
-function createCodeGenWorkflow(llm: BaseChatModel, onProgress?: CodeGenProgressCallback) {
+function createCodeGenWorkflow(llm: BaseChatModel, useRag: boolean, onProgress?: CodeGenProgressCallback) {
 
   // 节点1: 从 BDD 和架构中提取组件关键词
   const extractKeywordsNode = async (state: CodeGenStateType): Promise<Partial<CodeGenStateType>> => {
@@ -274,20 +278,27 @@ ${text}`;
   };
 
   // 构建工作流图（使用事件包装器）
-  const workflow = new StateGraph(CodeGenState)
-    .addNode('extractKeywords', createNodeWithEvents('extractKeywords', NODE_DESCRIPTIONS.extractKeywords, extractKeywordsNode, onProgress))
-    .addNode('fetchComponents', createNodeWithEvents('fetchComponents', NODE_DESCRIPTIONS.fetchComponents, fetchComponentsNode, onProgress))
-    .addNode('selectComponents', createNodeWithEvents('selectComponents', NODE_DESCRIPTIONS.selectComponents, selectComponentsNode, onProgress))
-    .addNode('fetchDocs', createNodeWithEvents('fetchDocs', NODE_DESCRIPTIONS.fetchDocs, fetchDocsNode, onProgress))
-    .addNode('generateCode', createNodeWithEvents('generateCode', NODE_DESCRIPTIONS.generateCode, generateCodeNode, onProgress))
-    .addEdge(START, 'extractKeywords')
-    .addEdge('extractKeywords', 'fetchComponents')
-    .addEdge('fetchComponents', 'selectComponents')
-    .addEdge('selectComponents', 'fetchDocs')
-    .addEdge('fetchDocs', 'generateCode')
-    .addEdge('generateCode', END);
-
-  return workflow.compile();
+  if (useRag) {
+    return new StateGraph(CodeGenState)
+      .addNode('extractKeywords', createNodeWithEvents('extractKeywords', NODE_DESCRIPTIONS.extractKeywords, extractKeywordsNode, onProgress))
+      .addNode('fetchComponents', createNodeWithEvents('fetchComponents', NODE_DESCRIPTIONS.fetchComponents, fetchComponentsNode, onProgress))
+      .addNode('selectComponents', createNodeWithEvents('selectComponents', NODE_DESCRIPTIONS.selectComponents, selectComponentsNode, onProgress))
+      .addNode('fetchDocs', createNodeWithEvents('fetchDocs', NODE_DESCRIPTIONS.fetchDocs, fetchDocsNode, onProgress))
+      .addNode('generateCode', createNodeWithEvents('generateCode', NODE_DESCRIPTIONS.generateCode, generateCodeNode, onProgress))
+      .addEdge(START, 'extractKeywords')
+      .addEdge('extractKeywords', 'fetchComponents')
+      .addEdge('fetchComponents', 'selectComponents')
+      .addEdge('selectComponents', 'fetchDocs')
+      .addEdge('fetchDocs', 'generateCode')
+      .addEdge('generateCode', END)
+      .compile();
+  } else {
+    return new StateGraph(CodeGenState)
+      .addNode('generateCode', createNodeWithEvents('generateCode', NODE_DESCRIPTIONS.generateCode, generateCodeNode, onProgress))
+      .addEdge(START, 'generateCode')
+      .addEdge('generateCode', END)
+      .compile();
+  }
 }
 
 /**
@@ -301,7 +312,7 @@ export function createCodeGenTool(config: LLMConfig, onProgress?: CodeGenProgres
     baseUrl: config.baseUrl,
   });
 
-  const workflow = createCodeGenWorkflow(llm, onProgress);
+  const workflow = createCodeGenWorkflow(llm, config.useRag ?? true, onProgress);
 
   return {
     name: 'generate_code',
@@ -321,6 +332,23 @@ export function createCodeGenTool(config: LLMConfig, onProgress?: CodeGenProgres
         ragContext: '',
         result: '',
       });
+
+      // 如果生成成功，进行项目合并
+      try {
+        const parsedResult = JSON.parse(result.result);
+        if (parsedResult.files && Array.isArray(parsedResult.files)) {
+          console.log('Merging project with base template...');
+          const finalTree = processProjectForWebContainer(baseTemplate as any, parsedResult.files);
+          return JSON.stringify({
+            tree: finalTree,
+            summary: parsedResult.summary,
+            files: parsedResult.files // 保留原始文件列表供展示
+          });
+        }
+      } catch (e) {
+        console.error('Error during project merging:', e);
+      }
+
       return result.result;
     },
   };

@@ -66,6 +66,7 @@ export class CodingAgent {
       apiKey: config.apiKey,
       baseUrl: config.baseUrl,
       streaming: config.streaming ?? false,
+      useRag: config.useRag ?? true,
     };
 
     this.plannerExecutor = new PlannerExecutor({
@@ -85,6 +86,7 @@ export class CodingAgent {
    */
   async run(input: CodingAgentInput): Promise<CodingAgentResult> {
     const { requirement, onProgress } = input;
+    console.log(`[CodingAgent] run() called with requirement: ${requirement.slice(0, 50)}...`);
 
     // 创建工具集
     const llmConfig = {
@@ -97,7 +99,7 @@ export class CodingAgent {
     const tools: Tool[] = [
       createBDDTool(llmConfig),
       createArchitectTool(llmConfig),
-      createCodeGenTool(llmConfig, async (event) => {
+      createCodeGenTool({ ...llmConfig, useRag: this.config.useRag }, async (event) => {
         // 将工作流事件转发给前端（复用 tool_call / tool_call_result 格式）
         await this.emitEvent(onProgress, event as unknown as CodingAgentEvent);
       }),
@@ -111,8 +113,10 @@ export class CodingAgent {
     };
 
     try {
+      console.log(`[CodingAgent] Generating greeting...`);
       // 发送友好的开场提示
       const greeting = await this.generateGreeting(requirement);
+      console.log(`[CodingAgent] Greeting generated: ${greeting}`);
       await this.emitEvent(onProgress, {
         type: 'normal_message',
         messageId: `greeting_${Date.now()}`,
@@ -120,6 +124,7 @@ export class CodingAgent {
         timestamp: Date.now(),
       });
 
+      console.log(`[CodingAgent] Starting PlannerExecutor...`);
       await this.plannerExecutor.run({
         goal: `${requirement}`,
         tools,
@@ -147,6 +152,7 @@ export class CodingAgent {
         bddFeatures: results.bddFeatures,
         architecture: results.architecture,
         generatedFiles: results.codeResult?.files || [],
+        tree: results.codeResult?.tree,
         summary: results.codeResult?.summary || '',
       };
     } catch (error) {
@@ -267,6 +273,7 @@ export class CodingAgent {
         await this.emitEvent(onProgress, {
           type: 'code_generated',
           files: json.files,
+          tree: json.tree, // 包含合并后的文件树
           summary: json.summary || '',
           timestamp: Date.now(),
         });
@@ -302,6 +309,7 @@ export class CodingAgent {
       baseUrl: this.config.baseUrl,
     });
 
+    console.log(`[CodingAgent] Invoking LLM for greeting...`);
     const response = await llm.invoke([
       new SystemMessage('你是一个友好的编程助手。根据用户的需求，生成一条简短的中文确认消息（20字以内），告诉用户你即将开始为他们做什么。语气要友好专业，可以使用1个emoji。只返回确认消息本身，不要有其他内容。示例："好的，我来帮您生成登录页 ✨"'),
       new HumanMessage(`用户需求: ${requirement}`),

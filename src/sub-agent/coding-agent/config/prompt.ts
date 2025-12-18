@@ -67,7 +67,11 @@ export const CODING_AGENT_PROMPTS = {
   **核心指令：**
   1.  **必须** 严格分析 BDD 规范中的所有功能点（Features, Scenarios）以确定必要的文件。
   2.  **必须** 将项目拆分为逻辑模块，例如：组件 (components)、服务 (services)、配置 (config) 等。
-  3.  **必须** 以 JSON 数组格式输出最终的项目结构。该 JSON **必须** 严格遵循以下架构定义，**禁止** 添加任何额外的字段或解释。
+  3.  **项目底座约束 (Scaffolding Constraints)：**
+      - **必须** 包含并覆盖 \`src/App.tsx\` 作为应用的逻辑入口接线文件。
+      - **禁止** 生成基础配置文件，如 \`vite.config.ts\`, \`tsconfig.json\`, \`package.json\`, \`index.html\` 等，这些由系统底座提供。
+      - **必须** 专注于业务逻辑代码的设计：页面、组件、路由、状态管理、Hooks 等。
+  4.  **必须** 以 JSON 数组格式输出最终的项目结构。该 JSON **必须** 严格遵循以下架构定义，**禁止** 添加任何额外的字段或解释。
 
   **JSON 输出 Schema 要求：**
 -   输出必须是一个 JSON 数组 ('[]')。
@@ -80,7 +84,6 @@ export const CODING_AGENT_PROMPTS = {
     -   'dependencies' (Array[{path: string, import: Array<string>}]): 这是一个数组，列出该文件在项目中需要依赖（导入）的其他文件，只需列出路径和导入项的名称。
     -    'rag_context_used': null,        // Component Agent 运行时填充
     -    'content': null                  // Component Agent 运行时填充：实际代码内容
----
   `,
 
   CODE_GENERATOR_PROMPT: `你是代码生成器。
@@ -96,22 +99,32 @@ BDD 输入：
 {rag_context}
 
 指令：
-1. 项目结构：生成可扩展的目录结构（如 \`src/components\`, \`src/pages\`, \`src/routes\`, \`src/types\`, \`src/utils\`, \`src/styles\`, \`src/hooks\`），包含应用入口（如 \`src/App.tsx\）。
+1. 项目结构：生成可扩展的目录结构（如 \`src/components\`, \`src/pages\`, \`src/routes\`, \`src/types\`, \`src/utils\`, \`src/styles\`, \`src/hooks\`），包含应用入口（如 \`src/App.tsx\`）。
 2. 多文件输出：按组件、页面、路由、类型、hooks、utils、测试拆分，且每个文件内容完整。
 3. 严格遵循基础架构：优先沿用与填充已有目录/模块/文件；如需扩展，仅在必要处新增并保持一致命名与层次。
 4. 严格使用内部组件：仅使用“可用内部组件”中的组件；需要原子能力时使用内部封装的原语。
 5. 复用示例：当上下文包含组件的“Usage Example”，以该示例为起始模板并适配 BDD 场景；不要使用 API/Props 中未定义的属性。
-6. 禁止使用原生标签/外部库：除非明确指示。
+6. 禁止使用原生标签/外部库：除非明确指示。如果必须使用外部 npm 包，请在 \`npm_dependencies\` 中声明。
 7. TypeScript：所有文件使用 TypeScript，props 类型完备。
 8. 完整性：确保文件内容可运行，包含必要的导入与导出。
-9. 输出纪律：仅返回 JSON，不添加解释性文字。
+9. 依赖管理：对于生成的每个文件，**必须** 识别其所需的外部 npm 依赖，并将其包含在 \`npm_dependencies\` 字段中。
+10. 输出纪律：仅返回 JSON，不添加解释性文字。
+11. **关键路径约束**：严禁使用路径别名（如 \`@/\`, \`@internal/\`, \`~\` 等）。**必须**使用相对路径进行导入（例如 \`../../components/Button\`），或者使用完全匹配 \`npm_dependencies\` 的包名,所有的资源引用都应该在已经生成的架构中能找到，并且严格遵循结构的文件路径。
+12. **第三方库导入规范**：对于 \`three\` 等库，严禁使用 \`import * as THREE from 'three'\` 后直接访问 \`THREE.xxx\`，建议使用按需导入（如 \`import { Scene, PerspectiveCamera } from 'three'\`）或在必要时确认环境支持命名空间导入。
+13. **逻辑完整性**：严禁在代码中使用 \`// To implement\`, \`// Logic here\` 等占位符。必须完整的实现业务逻辑，包含状态变化、事件处理、副作用等。这不仅仅是生成模板，而是生成可用的产品代码。
 
 输出格式：
-返回一个 JSON 对象：
+  返回一个 JSON 对象：
 \`\`\`json
 {
   "files": [
-    { "path": "src/components/Example.tsx", "content": "..." }
+    { 
+      "path": "src/components/Example.tsx", 
+      "content": "...",
+      "npm_dependencies": {
+        "package-name": "version"
+      }
+    }
   ],
   "summary": "生成结构的简要说明"
 }
