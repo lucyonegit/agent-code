@@ -110,12 +110,40 @@ export const CODING_AGENT_PROMPTS = {
 5. 复用示例：当上下文包含组件的“Usage Example”，以该示例为起始模板并适配 BDD 场景；不要使用 API/Props 中未定义的属性。
 6. 禁止使用原生标签/外部库：除非明确指示。如果必须使用外部 npm 包，请在 \`npm_dependencies\` 中声明。
 7. TypeScript：所有文件使用 TypeScript，props 类型完备。
-8. 完整性：确保文件内容可运行，包含必要的导入与导出。
-9. 依赖管理：对于生成的每个文件，**必须** 识别其所需的外部 npm 依赖，并将其包含在 \`npm_dependencies\` 字段中。
-10. 输出纪律：仅返回 JSON，不添加解释性文字。
-11. **关键路径约束**：严禁使用路径别名（如 \`@/\`, \`@internal/\`, \`~\` 等）。**必须**使用相对路径进行导入（例如 \`../../components/Button\`），或者使用完全匹配 \`npm_dependencies\` 的包名,所有的资源引用都应该在已经生成的架构中能找到，并且严格遵循结构的文件路径。
-12. **第三方库导入规范**：对于 \`three\` 等库，严禁使用 \`import * as THREE from 'three'\` 后直接访问 \`THREE.xxx\`，建议使用按需导入（如 \`import { Scene, PerspectiveCamera } from 'three'\`）或在必要时确认环境支持命名空间导入。
-13. **逻辑完整性**：严禁在代码中使用 \`// To implement\`, \`// Logic here\` 等占位符。必须完整的实现业务逻辑，包含状态变化、事件处理、副作用等。这不仅仅是生成模板，而是生成可用的产品代码。
+8. **文件扩展名规则（必须严格遵守）**：
+    - 包含 JSX/TSX 语法的文件（如 \`<div>\`, \`<Component />\`, \`<Context.Provider>\` 等）**必须**使用 \`.tsx\` 扩展名
+    - 仅包含纯 TypeScript 代码的文件（如类型定义、工具函数、常量）使用 \`.ts\` 扩展名
+    - **常见 .tsx 文件**：React 组件、页面、Context Provider、自定义 Hooks（如果返回 JSX）
+    - **常见 .ts 文件**：类型定义（types.ts）、工具函数（utils.ts）、常量（constants.ts）、API 服务（不含 JSX 的）
+    - 示例：\`CounterContext.tsx\`（包含 Provider 组件）、\`useCounter.ts\`（纯逻辑 Hook）
+9. 完整性：确保文件内容可运行，包含必要的导入与导出。
+10. 依赖管理：对于生成的每个文件，**必须** 识别其所需的外部 npm 依赖，并将其包含在 \`npm_dependencies\` 字段中。
+11. 输出纪律：仅返回 JSON，不添加解释性文字。
+12. **关键路径约束**：
+    - 严禁使用路径别名（如 \`@/\`, \`@internal/\`, \`~\` 等）。
+    - **必须**使用准确的相对路径（如 \`../../components/Button\`）。请仔细计算目录深度，例如从 \`src/pages/sub/Page.tsx\` 引用 \`src/hooks/useHook.ts\` 必须是 \`../../hooks/useHook\`。
+    - **必须**确保导入的文件确实存在。
+    - **路径计算规则**：
+      - 同级目录使用 \`./filename\`（如 \`./Button\` 导入同目录的 Button.tsx）
+      - 父级目录每上一层加一个 \`../\`
+      - 例如：从 \`src/components/ui/Button.tsx\` 引用 \`src/utils/helpers.ts\` 应使用 \`../../utils/helpers\`
+      - 例如：从 \`src/pages/Home.tsx\` 引用 \`src/components/Header.tsx\` 应使用 \`../components/Header\`
+    - **禁止省略文件扩展名**的情况：导入 CSS/JSON/图片文件时必须包含扩展名（如 \`./styles.css\`, \`./data.json\`）
+13. **第三方库导入规范**：
+    - 严禁使用 \`import * as XXX from 'xxx'\` 后直接访问 \`XXX.xxx\`，必须使用按需导入
+    - \`three.js\`: 使用 \`import { Scene, PerspectiveCamera, WebGLRenderer, Mesh, BoxGeometry, MeshBasicMaterial } from 'three'\`
+    - \`react-router-dom\`: 使用 \`import { BrowserRouter, Routes, Route, Link, useNavigate, useParams } from 'react-router-dom'\`
+    - \`axios\`: 使用默认导入 \`import axios from 'axios'\`
+    - \`framer-motion\`: 使用 \`import { motion, AnimatePresence } from 'framer-motion'\`
+    - \`zustand\`: 使用 \`import { create } from 'zustand'\`
+14. **导入路径自检清单**（生成代码前必须验证）：
+    - 所有导入路径都使用相对路径，无 \`@/\` 别名
+    - 每个导入的文件在项目结构中确实存在
+    - 导入的符号在源文件中确实导出
+    - 相对路径深度计算正确（数一下 \`../\` 的个数）
+15. **逻辑完整性**：
+    - 严禁使用 \`// To implement\`, \`// Logic here\` 等占位符。必须完整实现所有逻辑。
+    - **导出检查**：如果你导入了一个符号（如 \`ImportedType\`），请确保源文件确实导出了它（\`export interface ImportedType ...\`）。严禁引用不存在的导出。
 
 输出格式：
   返回一个 JSON 对象：
