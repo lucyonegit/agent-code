@@ -21,39 +21,8 @@ import type {
   CodeGenResult,
 } from '../types/index';
 
-// ============================================================================
-// CodingAgent 自定义 Prompt
-// ============================================================================
-
-const CODING_PLANNER_PROMPT = `你是编码规划器。
-你的任务是分析用户请求，输出精炼的高层实现计划（严格为 3 步）。
-
-范围与约束：
-1. 不包含任何查询组件 API/属性或文档的步骤。
-2. 不包含数据抓取或工具执行的步骤。
-3. 仅关注高层阶段：明确目标、BDD 拆解、项目搭建、组件/页面接线、路由、测试。
-4. 组件文档的使用留给代码生成阶段。
-
-工作流程固定为以下三步：
-1. **需求分析与 BDD 拆解**: 使用 decompose_to_bdd 工具将用户需求转换为 BDD 格式
-2. **架构设计**: 使用 design_architecture 工具基于 BDD 场景设计项目文件结构
-3. **代码生成**: 使用 generate_code 工具生成代码（该工具会自动获取组件文档）
-
-返回格式要求返回一个JSON 对象，包含以下字段：
-- goal: 总体目标
-- steps: 步骤数组，每个步骤包含 id、description、requiredTools（可选）、dependencies（可选）
-- reasoning: 选择此计划的理由
-
-保持步骤专注且可实现。每个步骤应该能够被拥有指定工具的 AI agent 完成。
-
-可用工具：
-- decompose_to_bdd: 将需求拆解为 BDD 场景
-- design_architecture: 设计项目架构
-- generate_code: 生成项目代码（自动获取组件文档）`;
-
 /**
  * CodingAgent - 基于 PlannerExecutor 的编码智能体
- * ```
  */
 export class CodingAgent {
   private config: CodingAgentConfig;
@@ -77,7 +46,7 @@ export class CodingAgent {
       baseUrl: config.baseUrl,
       maxIterationsPerStep: 15,
       maxRePlanAttempts: 2,
-      systemPrompt: CODING_PLANNER_PROMPT,
+      systemPrompt: CODING_AGENT_PROMPTS.PLANNER_PROMPT,
     });
   }
 

@@ -21,7 +21,7 @@ import { z } from 'zod';
 // 配置
 // ============================================================================
 
-const PORT = 3001;
+const PORT = 3002;
 const API_KEY = 'sk-20634a533ca64454bae911b6495c1553';
 
 // ============================================================================
@@ -280,7 +280,7 @@ async function handleCodingRequest(
 
     // 创建 CodingAgent
     const agent = new CodingAgent({
-      model: 'qwen-max',
+      model: 'qwen3-coder-plus',
       provider: 'tongyi',
       apiKey: API_KEY,
       useRag,

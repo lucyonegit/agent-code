@@ -167,12 +167,7 @@ function createCodeGenWorkflow(llm: BaseChatModel, useRag: boolean, onProgress?:
   // 节点1: 从 BDD 和架构中提取组件关键词
   const extractKeywordsNode = async (state: CodeGenStateType): Promise<Partial<CodeGenStateType>> => {
     const extractFromText = async (text: string): Promise<string[]> => {
-      const prompt = `Identify the UI components mentioned or implied in the following text. 
-Return ONLY a comma-separated list of component names (e.g., "Button, Table, DatePicker").
-Do not include any explanation or other text.
-
-Text:
-${text}`;
+      const prompt = CODING_AGENT_PROMPTS.KEYWORD_EXTRACTOR_PROMPT + `\n\nText:\n${text}`;
       const response = await llm.invoke([new HumanMessage(prompt)]);
       const content = response.content as string;
       return content.split(',').map(s => s.trim()).filter(s => s.length > 0);
