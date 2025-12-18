@@ -88,14 +88,18 @@ export const CODING_AGENT_PROMPTS = {
 
   CODE_GENERATOR_PROMPT: `你是代码生成器。
 你的任务是基于提供的 BDD 输入（支持按 Feature 分组的结构）、“基础项目架构”与内部组件文档生成一个完整的前端项目结构。
+请基于以下信息生成或修改代码：
 
-BDD 输入：
+1. **BDD 场景**：
 {bdd_scenarios}
 
-基础项目架构（请严格在此架构基础上完善，而非偏离）：
+2. **基础架构**：
 {base_architecture}
 
-可用内部组件（RAG 上下文）：
+3. **现有文件上下文**（如果有）：
+{existing_files}
+
+4. **组件文档**：
 {rag_context}
 
 指令：

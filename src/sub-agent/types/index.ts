@@ -104,6 +104,8 @@ export interface CodingAgentConfig {
 export interface CodingAgentInput {
   /** 用户需求描述 */
   requirement: string;
+  /** 现有文件上下文（用于多轮修改） */
+  files?: GeneratedFile[];
   /** 事件回调 */
   onProgress?: (event: CodingAgentEvent) => void | Promise<void>;
 }

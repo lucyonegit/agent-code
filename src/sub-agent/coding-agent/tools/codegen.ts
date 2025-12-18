@@ -51,6 +51,8 @@ export interface CodeGenProgressEvent {
 
 export type CodeGenProgressCallback = (event: CodeGenProgressEvent) => void | Promise<void>;
 
+import type { GeneratedFile } from '../../types/index';
+
 /**
  * 代码生成工作流状态定义
  */
@@ -58,6 +60,7 @@ const CodeGenState = Annotation.Root({
   // 输入
   bddScenarios: Annotation<string>,
   architecture: Annotation<string>,
+  existingFiles: Annotation<GeneratedFile[]>, // 新增：现有文件上下文
   // 中间状态
   keywords: Annotation<string[]>,
   availableComponents: Annotation<string[]>,
@@ -247,7 +250,7 @@ ${text}`;
 
   // 节点5: 调用 LLM 生成代码
   const generateCodeNode = async (state: CodeGenStateType): Promise<Partial<CodeGenStateType>> => {
-    const { bddScenarios, architecture, ragContext } = state;
+    const { bddScenarios, architecture, ragContext, existingFiles } = state;
 
     const codegenTool = {
       name: 'output_code',
@@ -259,10 +262,18 @@ ${text}`;
       tool_choice: { type: 'function', function: { name: 'output_code' } },
     } as any);
 
-    const prompt = CODING_AGENT_PROMPTS.CODE_GENERATOR_PROMPT
+    let prompt = CODING_AGENT_PROMPTS.CODE_GENERATOR_PROMPT
       .replace('{bdd_scenarios}', bddScenarios)
       .replace('{base_architecture}', architecture)
       .replace('{rag_context}', ragContext);
+
+    // 如果有现有文件，注入到提示词上下文
+    if (existingFiles && existingFiles.length > 0) {
+      const filesContext = existingFiles.map(f => `Path: ${f.path}\nContent:\n${f.content}`).join('\n\n');
+      prompt = prompt.replace('{existing_files}', filesContext);
+    } else {
+      prompt = prompt.replace('{existing_files}', '无现有文件');
+    }
 
     const response = await llmWithTool.invoke([
       new SystemMessage(CODING_AGENT_PROMPTS.SYSTEM_PERSONA),
@@ -304,7 +315,7 @@ ${text}`;
 /**
  * 创建代码生成工具（支持进度回调）
  */
-export function createCodeGenTool(config: LLMConfig, onProgress?: CodeGenProgressCallback): Tool {
+export function createCodeGenTool(config: LLMConfig, existingFiles: GeneratedFile[] | undefined, onProgress?: CodeGenProgressCallback): Tool {
   const llm = createLLM({
     model: config.model,
     provider: config.provider,
@@ -326,6 +337,7 @@ export function createCodeGenTool(config: LLMConfig, onProgress?: CodeGenProgres
       const result = await workflow.invoke({
         bddScenarios: args.bdd_scenarios,
         architecture: args.architecture,
+        existingFiles: existingFiles || [],
         keywords: [],
         availableComponents: [],
         selectedComponents: [],

@@ -269,8 +269,8 @@ async function handleCodingRequest(
 
   try {
     const body = await parseBody(req);
-    const { requirement, useRag = false } = body;
-    console.log(`[CodingRequest] Starting: "${requirement.slice(0, 50)}...", useRag: ${useRag}`);
+    const { requirement, useRag = false, files } = body;
+    console.log(`[CodingRequest] Starting: "${requirement.slice(0, 50)}...", useRag: ${useRag}, files: ${files?.length || 0}`);
 
     if (!requirement) {
       sendSSE(res, 'error', { message: '缺少 requirement 参数' });
@@ -289,6 +289,7 @@ async function handleCodingRequest(
     // 执行并流式返回结果
     const result = await agent.run({
       requirement,
+      files,
       onProgress: (event: CodingAgentEvent) => {
         console.log(`[CodingRequest] Progress: ${event.type} ${event.type === 'phase_start' ? (event as any).phase : ''}`);
         // 直接发送事件，前端会根据类型处理
