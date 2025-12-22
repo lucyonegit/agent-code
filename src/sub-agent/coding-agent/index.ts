@@ -227,7 +227,8 @@ export class CodingAgent {
           timestamp: event.timestamp,
         });
         // 提取并存储结果
-        this.extractAndStoreResults(event, results, onProgress);
+        console.log(`[CodingAgent] Tool call result for ${event.toolName}, result length: ${event.result.length}`);
+        await this.extractAndStoreResults(event, results, onProgress);
         break;
       case 'error':
         await this.emitEvent(onProgress, { type: 'error', message: event.message, timestamp: Date.now() });
@@ -245,9 +246,11 @@ export class CodingAgent {
   ): Promise<void> {
     try {
       const json = JSON.parse(event.result);
+      console.log(`[CodingAgent] Parsed JSON keys: ${Object.keys(json).join(', ')}`);
 
-      // 检测 BDD 结果（只在第一次检测到时发送）
-      if (Array.isArray(json) && json[0]?.feature_id && results.bddFeatures.length === 0) {
+      // 检测 BDD 结果
+      if (Array.isArray(json) && json[0]?.feature_id) {
+        console.log(`[CodingAgent] BDD features detected: ${json.length} features. Previous count: ${results.bddFeatures.length}`);
         results.bddFeatures = json;
         // 发送专用的 bdd_generated 事件
         await this.emitEvent(onProgress, {
@@ -264,8 +267,9 @@ export class CodingAgent {
         });
       }
 
-      // 检测架构结果（只在第一次检测到时发送）
-      if (Array.isArray(json) && json[0]?.path && json[0]?.type && results.architecture.length === 0) {
+      // 检测架构结果
+      if (Array.isArray(json) && json[0]?.path && json[0]?.type) {
+        console.log(`[CodingAgent] Architecture detected: ${json.length} files. Previous count: ${results.architecture.length}`);
         results.architecture = json;
         // 发送专用的 architecture_generated 事件
         await this.emitEvent(onProgress, {
@@ -282,8 +286,9 @@ export class CodingAgent {
         });
       }
 
-      // 检测代码生成结果（只在第一次检测到时发送）
-      if (json.files && Array.isArray(json.files) && !results.codeResult) {
+      // 检测代码生成结果
+      if (json.files && Array.isArray(json.files)) {
+        console.log(`[CodingAgent] Code generation results detected: ${json.files.length} files. Has tree: ${!!json.tree}`);
         results.codeResult = json;
         // 发送专用的 code_generated 事件
         await this.emitEvent(onProgress, {

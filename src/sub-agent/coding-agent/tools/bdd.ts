@@ -50,7 +50,7 @@ export interface LLMConfig {
 export function createBDDTool(config: LLMConfig): Tool {
   return {
     name: 'decompose_to_bdd',
-    description: '将用户需求拆解为 BDD（行为驱动开发）场景结构。返回 BDD Feature 数组。',
+    description: '将用户需求完整且一次性地拆解为 BDD（行为驱动开发）场景结构。必须覆盖所有需求，严禁分多次调用。',
     returnType: 'json',
     parameters: z.object({
       requirement: z.string().describe('用户需求描述'),

@@ -40,7 +40,8 @@ export const DEFAULT_REACT_PROMPT = `你是一个有帮助的 AI 助手，使用
 重要提示：
 - 先思考，后行动
 - 思考过程写在回复内容中
-- 需要使用工具时调用相应的 function`;
+- 需要使用工具时调用相应的 function
+- **严禁数据总结**：如果之前的步骤产出了 JSON 格式的数据（见上下文中的 \`\`\`json 块），在后续调用需要该数据的工具时，必须**完整、原样传递**原始 JSON 字符串，严禁进行任何文字总结或格式修改。`;
 
 /**
  * 默认最终答案工具（导出供外部使用）
@@ -61,15 +62,15 @@ const FINAL_ANSWER_PROMPT_SUFFIX = (toolName: string) => `
 
 特别注意：
 - 当你有了最终答案，必须调用 ${toolName} 工具来给出答案
-- 最终答案必须通过调用 ${toolName} 工具来给出，不要直接在回复中给出最终答案`;
+  - 最终答案必须通过调用 ${toolName} 工具来给出，不要直接在回复中给出最终答案`;
 
 /**
  * 默认用户消息模板（导出供外部使用）
  */
 export const defaultUserMessageTemplate = (input: string, toolDescriptions: string, context?: string): string => {
-  let message = `任务: ${input}\n\n可用工具:\n${toolDescriptions}`;
+  let message = `任务: ${input} \n\n可用工具: \n${toolDescriptions} `;
   if (context) {
-    message += `\n\n之前步骤的上下文:\n${context}`;
+    message += `\n\n之前步骤的上下文: \n${context} `;
   }
   return message;
 };
@@ -162,7 +163,7 @@ export class ReActExecutor {
       completedIterations = iteration;
       console.log(`第${iteration}循环开始... (当前消息数: ${messages.length})`);
       // 为本次迭代生成唯一的 thoughtId
-      const iterationId = `thought_${Date.now()}_${iteration}`;
+      const iterationId = `thought_${Date.now()}_${iteration} `;
 
       try {
         if (this.config.streaming) {
@@ -221,7 +222,7 @@ export class ReActExecutor {
 
             // 处理普通工具调用
             for (const call of response.tool_calls) {
-              const toolCallId = call.id || `call_${Date.now()}`;
+              const toolCallId = call.id || `call_${Date.now()} `;
               const toolStartTime = Date.now();
 
               // 发出 tool_call 事件
@@ -246,7 +247,7 @@ export class ReActExecutor {
                 try {
                   observation = await tool.execute(call.args);
                 } catch (error) {
-                  observation = `工具执行失败: ${error instanceof Error ? error.message : '未知错误'}`;
+                  observation = `工具执行失败: ${error instanceof Error ? error.message : '未知错误'} `;
                   success = false;
                   await this.emitEvent(onMessage, { type: 'error', message: observation, timestamp: Date.now() });
                 }
@@ -268,7 +269,7 @@ export class ReActExecutor {
                 content: observation,
               }));
 
-              iterationHistory.push(`动作: ${call.name}\n观察: ${observation}`);
+              iterationHistory.push(`动作: ${call.name} \n观察: ${observation} `);
             }
           }
           // 没有工具调用 - 继续下一轮迭代
@@ -277,10 +278,10 @@ export class ReActExecutor {
         const errorMessage = error instanceof Error ? error.message : '未知错误';
         await this.emitEvent(onMessage, {
           type: 'error',
-          message: `第 ${iteration} 次迭代失败: ${errorMessage}`,
+          message: `第 ${iteration} 次迭代失败: ${errorMessage} `,
           timestamp: Date.now(),
         });
-        messages.push(new HumanMessage(`发生错误: ${errorMessage}\n请继续尝试。`));
+        messages.push(new HumanMessage(`发生错误: ${errorMessage} \n请继续尝试。`));
       }
 
       // 防止无限循环：如果连续多次没有工具调用且输出为空
@@ -290,7 +291,7 @@ export class ReActExecutor {
     }
 
     // 达到最大迭代次数
-    const fallbackAnswer = `已达到最大迭代次数 (${this.config.maxIterations})。\n\n${iterationHistory.join('\n\n')}`;
+    const fallbackAnswer = `已达到最大迭代次数(${this.config.maxIterations})。\n\n${iterationHistory.join('\n\n')} `;
     await this.emitEvent(onMessage, {
       type: 'final_result',
       content: fallbackAnswer,
@@ -395,7 +396,7 @@ export class ReActExecutor {
 
       // 处理普通工具调用
       for (const call of toolCalls) {
-        const toolCallId = call.id || `call_${Date.now()}`;
+        const toolCallId = call.id || `call_${Date.now()} `;
         const toolStartTime = Date.now();
 
         // 发出 tool_call 事件
@@ -413,14 +414,14 @@ export class ReActExecutor {
         let success = true;
 
         if (!tool) {
-          observation = `工具 "${call.name}" 未找到。可用工具: ${allTools.map(t => t.name).join(', ')}`;
+          observation = `工具 "${call.name}" 未找到。可用工具: ${allTools.map(t => t.name).join(', ')} `;
           success = false;
           await this.emitEvent(onMessage, { type: 'error', message: observation, timestamp: Date.now() });
         } else {
           try {
             observation = await tool.execute(call.args);
           } catch (error) {
-            observation = `工具执行失败: ${error instanceof Error ? error.message : '未知错误'}`;
+            observation = `工具执行失败: ${error instanceof Error ? error.message : '未知错误'} `;
             success = false;
             await this.emitEvent(onMessage, { type: 'error', message: observation, timestamp: Date.now() });
           }
@@ -462,11 +463,11 @@ export class ReActExecutor {
           const zodSchema = schema as { description?: string; _def?: { typeName: string } };
           const type = zodSchema._def?.typeName?.replace('Zod', '') || 'any';
           const desc = zodSchema.description || '';
-          return `    - ${key} (${type}): ${desc}`;
+          return `    - ${key} (${type}): ${desc} `;
         })
         .join('\n');
 
-      return `- ${tool.name}: ${tool.description}\n  参数:\n${paramsDescription}`;
+      return `- ${tool.name}: ${tool.description} \n  参数: \n${paramsDescription} `;
     }).join('\n\n');
   }
 

@@ -48,7 +48,7 @@ export function createArchitectTool(config: LLMConfig): Tool {
     }),
     execute: async (args) => {
       const llm = createLLM({
-        model: config.model,
+        model: 'qwen3-coder-plus',
         provider: config.provider,
         apiKey: config.apiKey,
         baseUrl: config.baseUrl,
@@ -56,7 +56,7 @@ export function createArchitectTool(config: LLMConfig): Tool {
 
       const architectTool = {
         name: 'output_architecture',
-        description: '输出架构设计结果',
+        description: '当设计完毕后，严格调用此工具输出架构设计结果',
         schema: ArchitectureResultSchema,
       };
 
@@ -68,6 +68,8 @@ export function createArchitectTool(config: LLMConfig): Tool {
         new SystemMessage(CODING_AGENT_PROMPTS.ARCHITECT_GENERATOR_PROMPT),
         new HumanMessage(`BDD 规范:\n${args.bdd_scenarios}\n\n请基于以上 BDD 规范设计项目架构。`),
       ]);
+
+      console.log("arc response:-----", JSON.stringify(response));
 
       if (response.tool_calls && response.tool_calls.length > 0) {
         const result = response.tool_calls[0].args;

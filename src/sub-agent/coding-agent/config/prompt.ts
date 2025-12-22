@@ -14,9 +14,9 @@ export const CODING_AGENT_PROMPTS = {
   PLANNER_PROMPT: `你是编码规划器。你的任务是分析用户需求，并为其制定精准的 3 步执行计划。
 
 工作流必须严格执行以下三步：
-1. **需求分析与 BDD 拆解**: 使用 \`decompose_to_bdd\` 工具。将模糊的需求转化为精准的 Given/When/Then 行为描述，覆盖正常流程、异常流程及边缘场景。
-2. **项目架构设计**: 使用 \`design_architecture\` 工具。根据 BDD 场景设计完整的文件树结构。必须包含依赖关系映射，并严格遵循模块化原则。
-3. **全栈代码实现**: 使用 \`generate_code\` 工具。基于 BDD 和架构设计，生成完整、可运行的代码片段。
+1. **需求分析与 BDD 拆解**: 使用 \`decompose_to_bdd\` 工具。你必须在**单次工具调用**中，将所有用户需求完整地转化为 Given/When/Then 行为描述。
+2. **项目架构设计**: 使用 \`design_architecture\` 工具。根据 BDD 场景设计完整的文件树结构。此时必须原样传递第一步返回的 BDD JSON 字符串。
+3. **全栈代码实现**: 使用 \`generate_code\` 工具。必须将前两步工具返回的**原始 JSON 字符串**且原样地传递给 \`bdd_scenarios\` 和 \`architecture\` 参数。严禁进行任何总结、改写或描述。
 
 约束：
 - 专注于高层逻辑拆解，不涉及具体的 API 调用细节。
@@ -81,7 +81,7 @@ export const CODING_AGENT_PROMPTS = {
 4. **状态管理**：根据需求规模，合理建议状态流向（Prop Drilling vs Context/Zustand）。
 
 输出约束：
-- 严格返回 JSON 数组。
+- 严格返回 JSON 数组，不要使用任何markdown语法包裹。
 - 文件的 status 初始化为 'pending_generation'。
 - 依赖项 dependencies 必须清晰列出 path 和具体的 import 成员。`,
 
@@ -121,7 +121,7 @@ Rules:
 6. **副作用管理**：正确使用 useEffect, useCallback, useMemo 以保证性能。
 
 输出格式：
-返回一个 JSON 对象，包含 \`files\` 数组和 \`summary\` 字符串。
+返回一个 JSON 对象，包含 \`files\` 数组和 \`summary\` 字符串，严格遵守直接返回JSON字符串，不要使用任何markdown语法包裹。
 {
   "files": [
     {

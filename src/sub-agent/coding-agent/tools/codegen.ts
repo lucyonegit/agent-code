@@ -249,7 +249,7 @@ function createCodeGenWorkflow(llm: BaseChatModel, useRag: boolean, onProgress?:
 
     const codegenTool = {
       name: 'output_code',
-      description: '输出代码生成结果',
+      description: '当代码生成完毕后，严格调用此工具输出代码生成结果',
       schema: CodeGenResultSchema,
     };
 
@@ -275,6 +275,7 @@ function createCodeGenWorkflow(llm: BaseChatModel, useRag: boolean, onProgress?:
       new HumanMessage(prompt),
     ]);
 
+    console.log('code gen response:------', JSON.stringify(response))
     const toolCalls = (response as any).tool_calls;
     if (toolCalls && toolCalls.length > 0) {
       return { result: JSON.stringify(toolCalls[0].args, null, 2) };
@@ -312,7 +313,7 @@ function createCodeGenWorkflow(llm: BaseChatModel, useRag: boolean, onProgress?:
  */
 export function createCodeGenTool(config: LLMConfig, existingFiles: GeneratedFile[] | undefined, onProgress?: CodeGenProgressCallback): Tool {
   const llm = createLLM({
-    model: config.model,
+    model: 'qwen3-coder-plus',
     provider: config.provider,
     apiKey: config.apiKey,
     baseUrl: config.baseUrl,
@@ -325,8 +326,8 @@ export function createCodeGenTool(config: LLMConfig, existingFiles: GeneratedFil
     description: '基于 BDD 场景和架构设计生成项目代码（使用 LangGraph 工作流）',
     returnType: 'json',
     parameters: z.object({
-      bdd_scenarios: z.string().describe('BDD 场景 JSON'),
-      architecture: z.string().describe('架构设计 JSON'),
+      bdd_scenarios: z.string().describe('BDD 场景原始 JSON 字符串（必须完整传递前一步的结果，禁止总结描述）'),
+      architecture: z.string().describe('架构设计原始 JSON 字符串（必须完整传递前一步的结果，禁止总结描述）'),
     }),
     execute: async (args) => {
       const result = await workflow.invoke({

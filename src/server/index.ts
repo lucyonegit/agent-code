@@ -280,7 +280,7 @@ async function handleCodingRequest(
 
     // 创建 CodingAgent
     const agent = new CodingAgent({
-      model: 'qwen3-coder-plus',
+      model: 'qwen-max',
       provider: 'tongyi',
       apiKey: API_KEY,
       useRag,
