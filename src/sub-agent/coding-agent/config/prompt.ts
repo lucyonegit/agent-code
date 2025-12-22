@@ -95,33 +95,106 @@ Rules:
 - Return ONLY a comma-separated list of component names (e.g., "Input, List, Card").
 - Do not add any conversational text or formatting.`,
 
-  CODE_GENERATOR_PROMPT: `你是一名全能的代码生成专家。请结合 BDD 场景、架构设计和内部组件文档（RAG），生成最终的实现代码。
+  CODE_GENERATOR_PROMPT: `你是一名全能的代码生成专家，同时也是 UI/UX 设计大师。请结合 BDD 场景、架构设计和内部组件文档，生成高质量、美观的实现代码。
 
-1. **BDD 场景**：
+## 输入上下文
+
+### 1. BDD 场景
 {bdd_scenarios}
 
-2. **架构设计**：
+### 2. 架构设计
 {base_architecture}
 
-3. **现有文件上下文**（如果有）：
+### 3. 现有文件上下文（如果有）
 {existing_files}
 
-4. **内部组件文档 (RAG)**：
+### 4. 内部组件文档 (RAG)
 {rag_context}
 
-最高指令：
-1. **生产级代码**：生成的代码必须是可以直接运行的，包含必要的 Imports、Exports 和 TypeScript 类型。
-2. **RAG 严谨对齐**：仅使用文档中定义的组件和 Props。严禁臆造属性。如果文档给出了 Usage Example，请根据其模式进行适配。
-3. **拒绝占位符**：严禁使用 \`// To implementation\` 或 \`// Logic here\`。必须实现完整的业务逻辑（如校验、状态更新、数据处理）。
-4. **路径自校验 (Critical)**：
-   - 再次检查所有 Import 的相对路径是否正确。
-   - 导入 CSS/Assets 时必须包含扩展名（如 \`./style.css\`）。
-   - 组件/模块导入不带扩展名。
-5. **逻辑鲁棒性**：处理异步状态（loading/error）、空数据状态以及表单校验逻辑。
-6. **副作用管理**：正确使用 useEffect, useCallback, useMemo 以保证性能。
+---
 
-输出格式：
-返回一个 JSON 对象，包含 \`files\` 数组和 \`summary\` 字符串，严格遵守直接返回JSON字符串，不要使用任何markdown语法包裹。
+## 设计规范（必须严格遵守）
+
+### CSS 变量体系
+生成的 CSS 必须在 \`:root\` 中定义以下变量，并在所有组件中引用：
+\`\`\`css
+:root {
+  /* 颜色系统 */
+  --color-bg: #0f0f23;
+  --color-surface: #1a1a2e;
+  --color-surface-hover: #252542;
+  --color-primary: #6366f1;
+  --color-primary-hover: #818cf8;
+  --color-secondary: #22d3ee;
+  --color-accent: #f472b6;
+  --color-success: #10b981;
+  --color-warning: #f59e0b;
+  --color-error: #ef4444;
+  --color-text: #f8fafc;
+  --color-text-secondary: #94a3b8;
+  --color-text-muted: #64748b;
+  --color-border: #334155;
+  
+  /* 间距 */
+  --space-xs: 0.25rem;
+  --space-sm: 0.5rem;
+  --space-md: 1rem;
+  --space-lg: 1.5rem;
+  --space-xl: 2rem;
+  --space-2xl: 3rem;
+  
+  /* 圆角 */
+  --radius-sm: 0.375rem;
+  --radius-md: 0.5rem;
+  --radius-lg: 0.75rem;
+  --radius-xl: 1rem;
+  --radius-full: 9999px;
+  
+  /* 阴影 */
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.4);
+  --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.5);
+  --shadow-glow: 0 0 20px rgba(99, 102, 241, 0.3);
+  
+  /* 过渡 */
+  --transition-fast: 150ms ease-out;
+  --transition-normal: 250ms ease-out;
+}
+\`\`\`
+
+### 样式约束（违反任何一条将导致生成失败）
+1. **禁用 Hardcoded 颜色**：严禁 \`color: #xxx\` 或 \`background: rgb()\`，必须使用 \`var(--color-*)\`
+2. **现代视觉效果**：
+   - 按钮/卡片必须有 \`border-radius\`、\`box-shadow\` 和渐变背景
+   - 使用 \`backdrop-filter: blur()\` 实现毛玻璃效果
+   - 添加微妙的边框 \`border: 1px solid var(--color-border)\`
+3. **交互反馈**：所有可交互元素必须有 \`:hover\`、\`:focus\`、\`:active\` 状态
+4. **过渡动画**：状态变化必须使用 \`transition: var(--transition-*)\`
+5. **响应式布局**：使用 \`display: flex/grid\`，禁止固定像素宽度布局
+6. **字体层次**：标题使用 \`font-weight: 600-700\`，正文 \`400\`，使用 \`letter-spacing\` 优化可读性
+
+---
+
+## 代码质量要求
+
+### 路径自校验（Critical - 编译必须通过）
+1. **相对路径精确计算**：
+   - 从 \`src/pages/Home.tsx\` 导入 \`src/components/Button.tsx\` → \`../components/Button\`
+   - 从 \`src/components/Card/index.tsx\` 导入 \`src/hooks/useData.ts\` → \`../../hooks/useData\`
+2. **CSS 导入带扩展名**：\`import './styles.css'\` 或 \`import '../App.css'\`
+3. **组件导入不带扩展名**：\`import Button from '../components/Button'\`
+4. **禁止路径别名**：严禁 \`@/\`、\`~/\`、\`@components/\` 等
+
+### 功能完整性
+1. **生产级代码**：必须可直接运行，包含完整的 Imports、Exports 和 TypeScript 类型
+2. **拒绝占位符**：严禁 \`// TODO\`、\`// 实现逻辑\` 等，必须实现完整业务逻辑
+3. **状态管理**：正确使用 useState、useEffect、useCallback、useMemo
+4. **错误处理**：处理 loading、error、empty 三种状态
+
+---
+
+## 输出格式
+返回一个 JSON 对象，严格遵守直接返回 JSON 字符串，不要使用任何 markdown 语法包裹：
 {
   "files": [
     {

@@ -13,7 +13,8 @@ import type { Tool, LLMProvider } from '../../../types/index';
 import type { BaseChatModel } from '@langchain/core/language_models/chat_models';
 import { searchComponentDocs, getComponentList } from './rag';
 import { processProjectForWebContainer } from '../utils/project-merger';
-import baseTemplate from '../../../constants/baseTemplate.json';
+import { validateAllFiles, generateFixPrompt } from '../utils/path-validator';
+import { getViteTemplate } from '../services/template-generator';
 
 /**
  * 代码生成结果 Schema
@@ -68,6 +69,8 @@ const CodeGenState = Annotation.Root({
   ragContext: Annotation<string>,
   // 输出
   result: Annotation<string>,
+  // 路径验证
+  pathErrors: Annotation<string[]>,
 });
 
 type CodeGenStateType = typeof CodeGenState.State;
@@ -81,6 +84,7 @@ const NODE_DESCRIPTIONS: Record<string, string> = {
   selectComponents: '根据关键词智能匹配选择需要的组件',
   fetchDocs: '获取选中组件的 API 文档和使用示例',
   generateCode: '基于上下文调用 LLM 生成项目代码',
+  validatePaths: '验证所有 import 路径的正确性',
 };
 
 /**
@@ -284,6 +288,49 @@ function createCodeGenWorkflow(llm: BaseChatModel, useRag: boolean, onProgress?:
     return { result: JSON.stringify({ files: [], summary: '代码生成失败' }) };
   };
 
+  // 节点6: 验证路径正确性
+  const validatePathsNode = async (state: CodeGenStateType): Promise<Partial<CodeGenStateType>> => {
+    try {
+      const parsed = JSON.parse(state.result);
+      if (!parsed.files || !Array.isArray(parsed.files)) {
+        return { pathErrors: [] };
+      }
+
+      const validation = validateAllFiles(parsed.files);
+
+      if (!validation.valid) {
+        console.log(`[CodeGen] Found ${validation.errors.length} path errors, generating fix prompt...`);
+
+        // 生成修复提示并让 LLM 修复
+        const fixPrompt = generateFixPrompt(validation.errors);
+        const fixResponse = await llm.invoke([
+          new SystemMessage('你是代码修复专家。请根据错误提示修复 import 路径问题，返回修正后的完整 JSON。'),
+          new HumanMessage(`原始生成结果:
+${state.result}
+
+${fixPrompt}
+
+请返回修正后的完整 JSON（只返回 JSON，不要 markdown 包裹）：`),
+        ]);
+
+        const fixedContent = (fixResponse.content as string).trim();
+        // 尝试提取 JSON
+        const jsonMatch = fixedContent.match(/\{[\s\S]*\}/);
+        if (jsonMatch) {
+          return {
+            result: jsonMatch[0],
+            pathErrors: validation.errors.map(e => e.message)
+          };
+        }
+      }
+
+      return { pathErrors: [] };
+    } catch (e) {
+      console.error('[CodeGen] Path validation error:', e);
+      return { pathErrors: [] };
+    }
+  };
+
   // 构建工作流图（使用事件包装器）
   if (useRag) {
     return new StateGraph(CodeGenState)
@@ -292,18 +339,22 @@ function createCodeGenWorkflow(llm: BaseChatModel, useRag: boolean, onProgress?:
       .addNode('selectComponents', createNodeWithEvents('selectComponents', NODE_DESCRIPTIONS.selectComponents, selectComponentsNode, onProgress))
       .addNode('fetchDocs', createNodeWithEvents('fetchDocs', NODE_DESCRIPTIONS.fetchDocs, fetchDocsNode, onProgress))
       .addNode('generateCode', createNodeWithEvents('generateCode', NODE_DESCRIPTIONS.generateCode, generateCodeNode, onProgress))
+      .addNode('validatePaths', createNodeWithEvents('validatePaths', NODE_DESCRIPTIONS.validatePaths, validatePathsNode, onProgress))
       .addEdge(START, 'extractKeywords')
       .addEdge('extractKeywords', 'fetchComponents')
       .addEdge('fetchComponents', 'selectComponents')
       .addEdge('selectComponents', 'fetchDocs')
       .addEdge('fetchDocs', 'generateCode')
-      .addEdge('generateCode', END)
+      .addEdge('generateCode', 'validatePaths')
+      .addEdge('validatePaths', END)
       .compile();
   } else {
     return new StateGraph(CodeGenState)
       .addNode('generateCode', createNodeWithEvents('generateCode', NODE_DESCRIPTIONS.generateCode, generateCodeNode, onProgress))
+      .addNode('validatePaths', createNodeWithEvents('validatePaths', NODE_DESCRIPTIONS.validatePaths, validatePathsNode, onProgress))
       .addEdge(START, 'generateCode')
-      .addEdge('generateCode', END)
+      .addEdge('generateCode', 'validatePaths')
+      .addEdge('validatePaths', END)
       .compile();
   }
 }
@@ -339,25 +390,56 @@ export function createCodeGenTool(config: LLMConfig, existingFiles: GeneratedFil
         selectedComponents: [],
         ragContext: '',
         result: '',
+        pathErrors: [],
       });
 
       // 如果生成成功，进行项目合并
       try {
         const parsedResult = JSON.parse(result.result);
         if (parsedResult.files && Array.isArray(parsedResult.files)) {
-          console.log('Merging project with base template...');
-          const finalTree = processProjectForWebContainer(baseTemplate as any, parsedResult.files);
+          console.log('Merging project with dynamic Vite template...');
+
+          // 使用动态生成的 Vite 模版
+          const baseTemplate = await getViteTemplate({ framework: 'react-ts' });
+          const finalTree = processProjectForWebContainer(baseTemplate, parsedResult.files);
+
           return JSON.stringify({
             tree: finalTree,
             summary: parsedResult.summary,
-            files: parsedResult.files // 保留原始文件列表供展示
+            files: parsedResult.files, // 保留原始文件列表供展示
+            pathErrors: result.pathErrors || [] // 包含路径修复信息
           });
         }
+        // 如果没有 files 数组，返回空结构
+        console.warn('[CodeGen] No files array in result, returning empty structure');
+        return JSON.stringify({
+          files: [],
+          tree: {},
+          summary: parsedResult.summary || '代码生成未产生文件',
+          pathErrors: []
+        });
       } catch (e) {
         console.error('Error during project merging:', e);
+        // 返回一个有效的结构，确保 code_generated 事件能触发
+        try {
+          const fallback = JSON.parse(result.result);
+          return JSON.stringify({
+            files: fallback.files || [],
+            tree: {},
+            summary: fallback.summary || '模版合并失败',
+            pathErrors: result.pathErrors || []
+          });
+        } catch {
+          // result.result 本身不是有效 JSON
+          console.error('[CodeGen] result.result is not valid JSON:', result.result?.slice(0, 200));
+          return JSON.stringify({
+            files: [],
+            tree: {},
+            summary: '代码生成结果解析失败',
+            pathErrors: []
+          });
+        }
       }
-
-      return result.result;
     },
   };
 }

@@ -306,7 +306,9 @@ export class CodingAgent {
           timestamp: Date.now(),
         });
       }
-    } catch { }
+    } catch (e) {
+      console.error('[CodingAgent] extractAndStoreResults parse error:', e, 'Raw result:', event.result?.slice(0, 200));
+    }
   }
 
   /**
