@@ -37,13 +37,13 @@ export function buildFileSystemTree(files: FileNode[]): WebContainerTree {
       if (isLast) {
         current[part] = {
           file: {
-            contents: file.content
-          }
+            contents: file.content,
+          },
         };
       } else {
         if (!current[part]) {
           current[part] = {
-            directory: {}
+            directory: {},
           };
         }
         current = current[part].directory;
@@ -57,7 +57,10 @@ export function buildFileSystemTree(files: FileNode[]): WebContainerTree {
 /**
  * 深度合并两个文件树
  */
-export function mergeProject(baseTree: WebContainerTree, aiTree: WebContainerTree): WebContainerTree {
+export function mergeProject(
+  baseTree: WebContainerTree,
+  aiTree: WebContainerTree
+): WebContainerTree {
   const merged = JSON.parse(JSON.stringify(baseTree));
 
   function mergeRecursive(target: any, source: any) {
@@ -112,7 +115,10 @@ export function patchPackageJson(tree: WebContainerTree, aiFiles: FileNode[]): W
 /**
  * 主合并函数
  */
-export function processProjectForWebContainer(baseTemplate: WebContainerTree, aiOutputFiles: FileNode[]): WebContainerTree {
+export function processProjectForWebContainer(
+  baseTemplate: WebContainerTree,
+  aiOutputFiles: FileNode[]
+): WebContainerTree {
   const aiTree = buildFileSystemTree(aiOutputFiles);
   let finalTree = mergeProject(baseTemplate, aiTree);
   finalTree = patchPackageJson(finalTree, aiOutputFiles);

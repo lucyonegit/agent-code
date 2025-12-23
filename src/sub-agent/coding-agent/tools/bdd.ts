@@ -26,13 +26,15 @@ const BDDFeatureSchema = z.object({
   feature_id: z.string().describe('功能唯一标识'),
   feature_title: z.string().describe('功能标题'),
   description: z.string().describe('功能描述'),
-  scenarios: z.array(z.object({
-    id: z.string().describe('场景 ID'),
-    title: z.string().describe('场景标题'),
-    given: z.array(z.string()).describe('前置条件'),
-    when: z.array(z.string()).describe('触发动作'),
-    then: z.array(z.string()).describe('预期结果'),
-  })),
+  scenarios: z.array(
+    z.object({
+      id: z.string().describe('场景 ID'),
+      title: z.string().describe('场景标题'),
+      given: z.array(z.string()).describe('前置条件'),
+      when: z.array(z.string()).describe('触发动作'),
+      then: z.array(z.string()).describe('预期结果'),
+    })
+  ),
 });
 
 export const BDDResultSchema = z.array(BDDFeatureSchema);
@@ -50,12 +52,13 @@ export interface LLMConfig {
 export function createBDDTool(config: LLMConfig): Tool {
   return {
     name: 'decompose_to_bdd',
-    description: '将用户需求完整且一次性地拆解为 BDD（行为驱动开发）场景结构。必须覆盖所有需求，严禁分多次调用。',
+    description:
+      '将用户需求完整且一次性地拆解为 BDD（行为驱动开发）场景结构。必须覆盖所有需求，严禁分多次调用。',
     returnType: 'json',
     parameters: z.object({
       requirement: z.string().describe('用户需求描述'),
     }),
-    execute: async (args) => {
+    execute: async args => {
       const llm = createLLM({
         model: config.model,
         provider: config.provider,
@@ -73,7 +76,10 @@ export function createBDDTool(config: LLMConfig): Tool {
         tool_choice: { type: 'function', function: { name: 'output_bdd' } },
       });
 
-      const prompt = CODING_AGENT_PROMPTS.BDD_DECOMPOSER_PROMPT.replace('{requirement}', args.requirement);
+      const prompt = CODING_AGENT_PROMPTS.BDD_DECOMPOSER_PROMPT.replace(
+        '{requirement}',
+        args.requirement
+      );
 
       const response = await llmWithTool.invoke([
         new SystemMessage(CODING_AGENT_PROMPTS.SYSTEM_PERSONA),

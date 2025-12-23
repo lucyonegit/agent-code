@@ -20,11 +20,13 @@ import { getViteTemplate } from '../services/template-generator';
  * 代码生成结果 Schema
  */
 const CodeGenResultSchema = z.object({
-  files: z.array(z.object({
-    path: z.string().describe('文件路径'),
-    content: z.string().describe('文件内容'),
-    npm_dependencies: z.record(z.string()).optional().describe('该文件特定的 npm 依赖'),
-  })),
+  files: z.array(
+    z.object({
+      path: z.string().describe('文件路径'),
+      content: z.string().describe('文件内容'),
+      npm_dependencies: z.record(z.string()).optional().describe('该文件特定的 npm 依赖'),
+    })
+  ),
   summary: z.string().describe('生成摘要'),
 });
 
@@ -166,15 +168,23 @@ function summarizeResult(nodeName: string, result: Partial<CodeGenStateType>): a
 /**
  * 创建代码生成工作流
  */
-function createCodeGenWorkflow(llm: BaseChatModel, useRag: boolean, onProgress?: CodeGenProgressCallback) {
-
+function createCodeGenWorkflow(
+  llm: BaseChatModel,
+  useRag: boolean,
+  onProgress?: CodeGenProgressCallback
+) {
   // 节点1: 从 BDD 和架构中提取组件关键词
-  const extractKeywordsNode = async (state: CodeGenStateType): Promise<Partial<CodeGenStateType>> => {
+  const extractKeywordsNode = async (
+    state: CodeGenStateType
+  ): Promise<Partial<CodeGenStateType>> => {
     const extractFromText = async (text: string): Promise<string[]> => {
       const prompt = CODING_AGENT_PROMPTS.KEYWORD_EXTRACTOR_PROMPT + `\n\nText:\n${text}`;
       const response = await llm.invoke([new HumanMessage(prompt)]);
       const content = response.content as string;
-      return content.split(',').map(s => s.trim()).filter(s => s.length > 0);
+      return content
+        .split(',')
+        .map(s => s.trim())
+        .filter(s => s.length > 0);
     };
 
     const keywordsFromBDD = await extractFromText(state.bddScenarios);
@@ -185,7 +195,9 @@ function createCodeGenWorkflow(llm: BaseChatModel, useRag: boolean, onProgress?:
   };
 
   // 节点2: 获取可用组件列表
-  const fetchComponentsNode = async (_state: CodeGenStateType): Promise<Partial<CodeGenStateType>> => {
+  const fetchComponentsNode = async (
+    _state: CodeGenStateType
+  ): Promise<Partial<CodeGenStateType>> => {
     const result = await getComponentList();
     const answer = result.answer;
 
@@ -194,14 +206,19 @@ function createCodeGenWorkflow(llm: BaseChatModel, useRag: boolean, onProgress?:
       const parsed = JSON.parse(answer);
       if (Array.isArray(parsed)) availableComponents = parsed;
     } catch {
-      availableComponents = answer.split(/[,\n]/).map((s: string) => s.trim()).filter((s: string) => s.length > 0);
+      availableComponents = answer
+        .split(/[,\n]/)
+        .map((s: string) => s.trim())
+        .filter((s: string) => s.length > 0);
     }
 
     return { availableComponents };
   };
 
   // 节点3: 根据关键词选择匹配的组件
-  const selectComponentsNode = async (state: CodeGenStateType): Promise<Partial<CodeGenStateType>> => {
+  const selectComponentsNode = async (
+    state: CodeGenStateType
+  ): Promise<Partial<CodeGenStateType>> => {
     const { keywords, availableComponents } = state;
     const selected = new Set<string>();
     const availableLower = availableComponents.map(c => c.toLowerCase());
@@ -261,14 +278,15 @@ function createCodeGenWorkflow(llm: BaseChatModel, useRag: boolean, onProgress?:
       tool_choice: { type: 'function', function: { name: 'output_code' } },
     } as any);
 
-    let prompt = CODING_AGENT_PROMPTS.CODE_GENERATOR_PROMPT
-      .replace('{bdd_scenarios}', bddScenarios)
+    let prompt = CODING_AGENT_PROMPTS.CODE_GENERATOR_PROMPT.replace('{bdd_scenarios}', bddScenarios)
       .replace('{base_architecture}', architecture)
       .replace('{rag_context}', ragContext);
 
     // 如果有现有文件，注入到提示词上下文
     if (existingFiles && existingFiles.length > 0) {
-      const filesContext = existingFiles.map(f => `Path: ${f.path}\nContent:\n${f.content}`).join('\n\n');
+      const filesContext = existingFiles
+        .map(f => `Path: ${f.path}\nContent:\n${f.content}`)
+        .join('\n\n');
       prompt = prompt.replace('{existing_files}', filesContext);
     } else {
       prompt = prompt.replace('{existing_files}', '无现有文件');
@@ -279,7 +297,7 @@ function createCodeGenWorkflow(llm: BaseChatModel, useRag: boolean, onProgress?:
       new HumanMessage(prompt),
     ]);
 
-    console.log('code gen response:------', JSON.stringify(response))
+    console.log('code gen response:------', JSON.stringify(response));
     const toolCalls = (response as any).tool_calls;
     if (toolCalls && toolCalls.length > 0) {
       return { result: JSON.stringify(toolCalls[0].args, null, 2) };
@@ -299,12 +317,16 @@ function createCodeGenWorkflow(llm: BaseChatModel, useRag: boolean, onProgress?:
       const validation = validateAllFiles(parsed.files);
 
       if (!validation.valid) {
-        console.log(`[CodeGen] Found ${validation.errors.length} path errors, generating fix prompt...`);
+        console.log(
+          `[CodeGen] Found ${validation.errors.length} path errors, generating fix prompt...`
+        );
 
         // 生成修复提示并让 LLM 修复
         const fixPrompt = generateFixPrompt(validation.errors);
         const fixResponse = await llm.invoke([
-          new SystemMessage('你是代码修复专家。请根据错误提示修复 import 路径问题，返回修正后的完整 JSON。'),
+          new SystemMessage(
+            '你是代码修复专家。请根据错误提示修复 import 路径问题，返回修正后的完整 JSON。'
+          ),
           new HumanMessage(`原始生成结果:
 ${state.result}
 
@@ -319,7 +341,7 @@ ${fixPrompt}
         if (jsonMatch) {
           return {
             result: jsonMatch[0],
-            pathErrors: validation.errors.map(e => e.message)
+            pathErrors: validation.errors.map(e => e.message),
           };
         }
       }
@@ -334,12 +356,55 @@ ${fixPrompt}
   // 构建工作流图（使用事件包装器）
   if (useRag) {
     return new StateGraph(CodeGenState)
-      .addNode('extractKeywords', createNodeWithEvents('extractKeywords', NODE_DESCRIPTIONS.extractKeywords, extractKeywordsNode, onProgress))
-      .addNode('fetchComponents', createNodeWithEvents('fetchComponents', NODE_DESCRIPTIONS.fetchComponents, fetchComponentsNode, onProgress))
-      .addNode('selectComponents', createNodeWithEvents('selectComponents', NODE_DESCRIPTIONS.selectComponents, selectComponentsNode, onProgress))
-      .addNode('fetchDocs', createNodeWithEvents('fetchDocs', NODE_DESCRIPTIONS.fetchDocs, fetchDocsNode, onProgress))
-      .addNode('generateCode', createNodeWithEvents('generateCode', NODE_DESCRIPTIONS.generateCode, generateCodeNode, onProgress))
-      .addNode('validatePaths', createNodeWithEvents('validatePaths', NODE_DESCRIPTIONS.validatePaths, validatePathsNode, onProgress))
+      .addNode(
+        'extractKeywords',
+        createNodeWithEvents(
+          'extractKeywords',
+          NODE_DESCRIPTIONS.extractKeywords,
+          extractKeywordsNode,
+          onProgress
+        )
+      )
+      .addNode(
+        'fetchComponents',
+        createNodeWithEvents(
+          'fetchComponents',
+          NODE_DESCRIPTIONS.fetchComponents,
+          fetchComponentsNode,
+          onProgress
+        )
+      )
+      .addNode(
+        'selectComponents',
+        createNodeWithEvents(
+          'selectComponents',
+          NODE_DESCRIPTIONS.selectComponents,
+          selectComponentsNode,
+          onProgress
+        )
+      )
+      .addNode(
+        'fetchDocs',
+        createNodeWithEvents('fetchDocs', NODE_DESCRIPTIONS.fetchDocs, fetchDocsNode, onProgress)
+      )
+      .addNode(
+        'generateCode',
+        createNodeWithEvents(
+          'generateCode',
+          NODE_DESCRIPTIONS.generateCode,
+          generateCodeNode,
+          onProgress
+        )
+      )
+      .addNode(
+        'validatePaths',
+        createNodeWithEvents(
+          'validatePaths',
+          NODE_DESCRIPTIONS.validatePaths,
+          validatePathsNode,
+          onProgress
+        )
+      )
       .addEdge(START, 'extractKeywords')
       .addEdge('extractKeywords', 'fetchComponents')
       .addEdge('fetchComponents', 'selectComponents')
@@ -350,8 +415,24 @@ ${fixPrompt}
       .compile();
   } else {
     return new StateGraph(CodeGenState)
-      .addNode('generateCode', createNodeWithEvents('generateCode', NODE_DESCRIPTIONS.generateCode, generateCodeNode, onProgress))
-      .addNode('validatePaths', createNodeWithEvents('validatePaths', NODE_DESCRIPTIONS.validatePaths, validatePathsNode, onProgress))
+      .addNode(
+        'generateCode',
+        createNodeWithEvents(
+          'generateCode',
+          NODE_DESCRIPTIONS.generateCode,
+          generateCodeNode,
+          onProgress
+        )
+      )
+      .addNode(
+        'validatePaths',
+        createNodeWithEvents(
+          'validatePaths',
+          NODE_DESCRIPTIONS.validatePaths,
+          validatePathsNode,
+          onProgress
+        )
+      )
       .addEdge(START, 'generateCode')
       .addEdge('generateCode', 'validatePaths')
       .addEdge('validatePaths', END)
@@ -362,7 +443,11 @@ ${fixPrompt}
 /**
  * 创建代码生成工具（支持进度回调）
  */
-export function createCodeGenTool(config: LLMConfig, existingFiles: GeneratedFile[] | undefined, onProgress?: CodeGenProgressCallback): Tool {
+export function createCodeGenTool(
+  config: LLMConfig,
+  existingFiles: GeneratedFile[] | undefined,
+  onProgress?: CodeGenProgressCallback
+): Tool {
   const llm = createLLM({
     model: 'qwen3-coder-plus',
     provider: config.provider,
@@ -390,21 +475,27 @@ export function createCodeGenTool(config: LLMConfig, existingFiles: GeneratedFil
 - 错误示例: "架构设计已完成，包括..."
 - 正确示例: [{"path":"src/App.tsx","type":"component",...}]`),
     }),
-    execute: async (args) => {
+    execute: async args => {
       // 严格验证输入格式
       const validateJsonInput = (input: string, fieldName: string): string => {
         const trimmed = input.trim();
         // 检查是否以 [ 或 { 开头（JSON 格式）
         if (!trimmed.startsWith('[') && !trimmed.startsWith('{')) {
-          console.error(`[CodeGen] Invalid ${fieldName} input: not JSON format. Input starts with: "${trimmed.slice(0, 50)}..."`);
-          throw new Error(`参数 ${fieldName} 格式错误：必须传入 JSON 数据，不能传入自然语言描述。请使用上一步工具的原始返回结果。`);
+          console.error(
+            `[CodeGen] Invalid ${fieldName} input: not JSON format. Input starts with: "${trimmed.slice(0, 50)}..."`
+          );
+          throw new Error(
+            `参数 ${fieldName} 格式错误：必须传入 JSON 数据，不能传入自然语言描述。请使用上一步工具的原始返回结果。`
+          );
         }
         // 尝试解析验证是否为有效 JSON
         try {
           JSON.parse(trimmed);
           return trimmed;
         } catch (e) {
-          console.error(`[CodeGen] Invalid ${fieldName} input: JSON parse failed. Input: "${trimmed.slice(0, 100)}..."`);
+          console.error(
+            `[CodeGen] Invalid ${fieldName} input: JSON parse failed. Input: "${trimmed.slice(0, 100)}..."`
+          );
           throw new Error(`参数 ${fieldName} 不是有效的 JSON 格式。请检查传入的数据。`);
         }
       };
@@ -438,7 +529,7 @@ export function createCodeGenTool(config: LLMConfig, existingFiles: GeneratedFil
             tree: finalTree,
             summary: parsedResult.summary,
             files: parsedResult.files, // 保留原始文件列表供展示
-            pathErrors: result.pathErrors || [] // 包含路径修复信息
+            pathErrors: result.pathErrors || [], // 包含路径修复信息
           });
         }
         // 如果没有 files 数组，返回空结构
@@ -447,7 +538,7 @@ export function createCodeGenTool(config: LLMConfig, existingFiles: GeneratedFil
           files: [],
           tree: {},
           summary: parsedResult.summary || '代码生成未产生文件',
-          pathErrors: []
+          pathErrors: [],
         });
       } catch (e) {
         console.error('Error during project merging:', e);
@@ -458,7 +549,7 @@ export function createCodeGenTool(config: LLMConfig, existingFiles: GeneratedFil
             files: fallback.files || [],
             tree: {},
             summary: fallback.summary || '模版合并失败',
-            pathErrors: result.pathErrors || []
+            pathErrors: result.pathErrors || [],
           });
         } catch {
           // result.result 本身不是有效 JSON
@@ -467,13 +558,10 @@ export function createCodeGenTool(config: LLMConfig, existingFiles: GeneratedFil
             files: [],
             tree: {},
             summary: '代码生成结果解析失败',
-            pathErrors: []
+            pathErrors: [],
           });
         }
       }
     },
   };
 }
-
-
-

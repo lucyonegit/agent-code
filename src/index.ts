@@ -35,9 +35,4 @@ export type {
 } from './types/index.js';
 
 // Schemas（高级用法）
-export {
-  ReActOutputSchema,
-  ActionSchema,
-  PlanSchema,
-  PlanStepSchema
-} from './types/index.js';
+export { ReActOutputSchema, ActionSchema, PlanSchema, PlanStepSchema } from './types/index.js';

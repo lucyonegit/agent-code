@@ -1,6 +1,6 @@
 /**
  * ReAct Agent 核心 - 类型定义
- * 
+ *
  * 本文件包含 ReAct Agent 框架的所有核心接口和类型定义。
  * 这些类型与业务逻辑完全解耦，设计用于最大程度的可复用性。
  */
@@ -35,7 +35,7 @@ export interface Tool {
   /** 定义工具参数的 Zod schema */
   parameters: ToolParameterSchema;
 
-  /** 
+  /**
    * 工具返回的数据类型
    * - 'json': 结构化 JSON 数据
    * - 'text': 纯文本
@@ -45,7 +45,7 @@ export interface Tool {
    */
   returnType?: ToolReturnType;
 
-  /** 
+  /**
    * 使用给定参数执行工具
    * @param args - 符合参数 schema 的参数对象
    * @returns 工具输出的字符串或 Promise<string>
@@ -62,10 +62,10 @@ export interface Tool {
  */
 export interface ThoughtEvent {
   type: 'thought';
-  thoughtId: string;      // 唯一标识符，用于前端聚合同一轮思考
-  chunk: string;          // 实时流式内容片段
-  isComplete: boolean;    // 是否为最后一个片段
-  timestamp: number;      // 时间戳
+  thoughtId: string; // 唯一标识符，用于前端聚合同一轮思考
+  chunk: string; // 实时流式内容片段
+  isComplete: boolean; // 是否为最后一个片段
+  timestamp: number; // 时间戳
 }
 
 /**
@@ -73,8 +73,8 @@ export interface ThoughtEvent {
  */
 export interface ToolCallEvent {
   type: 'tool_call';
-  toolCallId: string;     // 唯一标识符，用于匹配后续结果
-  toolName: string;       // 工具名称
+  toolCallId: string; // 唯一标识符，用于匹配后续结果
+  toolName: string; // 工具名称
   args: Record<string, any>; // 调用参数
   timestamp: number;
 }
@@ -84,11 +84,11 @@ export interface ToolCallEvent {
  */
 export interface ToolCallResultEvent {
   type: 'tool_call_result';
-  toolCallId: string;     // 对应的 toolCallId
-  toolName: string;       // 工具名称
-  result: string;         // 工具返回结果
-  success: boolean;       // 是否成功
-  duration: number;       // 执行耗时(ms)
+  toolCallId: string; // 对应的 toolCallId
+  toolName: string; // 工具名称
+  result: string; // 工具返回结果
+  success: boolean; // 是否成功
+  duration: number; // 执行耗时(ms)
   timestamp: number;
 }
 
@@ -97,8 +97,8 @@ export interface ToolCallResultEvent {
  */
 export interface FinalResultEvent {
   type: 'final_result';
-  content: string;        // 最终答案内容
-  totalDuration: number;  // 总耗时(ms)
+  content: string; // 最终答案内容
+  totalDuration: number; // 总耗时(ms)
   iterationCount: number; // 迭代次数
   timestamp: number;
 }
@@ -118,8 +118,8 @@ export interface ErrorEvent {
  */
 export interface NormalMessageEvent {
   type: 'normal_message';
-  messageId: string;      // 唯一标识符
-  content: string;        // 消息内容
+  messageId: string; // 唯一标识符
+  content: string; // 消息内容
   timestamp: number;
 }
 
@@ -185,7 +185,7 @@ export type ReActEvent =
   | ToolCallResultEvent
   | FinalResultEvent
   | ErrorEvent
-  | NormalMessageEvent
+  | NormalMessageEvent;
 /**
  * 处理 ReAct 事件的回调函数类型
  */
@@ -231,7 +231,7 @@ export interface ReActConfig {
   /** 自定义用户消息模板 */
   userMessageTemplate?: (input: string, toolDescriptions: string, context?: string) => string;
 
-  /** 
+  /**
    * 最终答案工具（可选）
    * 如果提供，ReActExecutor 会自动将其添加到工具列表，并在系统提示词中添加使用说明
    */

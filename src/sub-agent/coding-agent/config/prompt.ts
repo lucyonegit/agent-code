@@ -1,4 +1,3 @@
-
 export const CODING_AGENT_PROMPTS = {
   SYSTEM_PERSONA: `你是一名顶尖的资深前端架构师与 AI 编码专家。
 你的目标是基于 BDD 规范，构建高质量、生产级别的 Web 应用程序。
@@ -204,5 +203,5 @@ Rules:
     }
   ],
   "summary": "本次生成的详细技术总结"
-}`
+}`,
 };

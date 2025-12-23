@@ -1,10 +1,10 @@
 /**
  * PlannerExecutor - 双循环规划架构
- * 
+ *
  * 实现 Planner + ReAct 两层循环：
  * - 外层循环：Planner 生成和调整计划
  * - 内层循环：ReActExecutor 执行每个步骤
- * 
+ *
  * 这是一个业务无关的基础架构组件。
  * 所有提示词和消息都可通过 PlannerConfig 配置。
  */
@@ -30,12 +30,17 @@ import {
 const PlanRefinementSchema = z.object({
   shouldReplan: z.boolean().describe('计划是否需要调整'),
   reasoning: z.string().describe('决策的解释'),
-  updatedSteps: z.array(z.object({
-    id: z.string(),
-    description: z.string(),
-    requiredTools: z.array(z.string()).nullish(),
-    status: z.enum(['pending', 'skipped']).nullish(),
-  })).nullish().describe('如果需要重规划，更新后的剩余步骤'),
+  updatedSteps: z
+    .array(
+      z.object({
+        id: z.string(),
+        description: z.string(),
+        requiredTools: z.array(z.string()).nullish(),
+        status: z.enum(['pending', 'skipped']).nullish(),
+      })
+    )
+    .nullish()
+    .describe('如果需要重规划，更新后的剩余步骤'),
 });
 
 type PlanRefinement = z.infer<typeof PlanRefinementSchema>;
@@ -86,7 +91,11 @@ export const defaultPlanMessageTemplate = (goal: string, toolDescriptions: strin
 /**
  * 默认重规划消息模板
  */
-export const defaultRefineMessageTemplate = (plan: Plan, latestResult: string, tools: Tool[]): string => {
+export const defaultRefineMessageTemplate = (
+  plan: Plan,
+  latestResult: string,
+  tools: Tool[]
+): string => {
   const completedSteps = plan.steps.filter(s => s.status === 'done');
   const pendingSteps = plan.steps.filter(s => s.status === 'pending');
 
@@ -165,10 +174,10 @@ export class PlannerExecutor {
 
     try {
       // 步骤 1：生成初始计划
-      let plan = await this.generatePlan(goal, tools);
+      const plan = await this.generatePlan(goal, tools);
 
       // 步骤 2：执行计划步骤
-      let rePlanAttempts = 0;
+      const rePlanAttempts = 0;
 
       while (!this.isPlanComplete(plan)) {
         const currentStep = this.getNextStep(plan);
@@ -309,7 +318,11 @@ export class PlannerExecutor {
   /**
    * 根据执行结果优化计划
    */
-  private async refinePlan(plan: Plan, latestResult: string, tools: Tool[]): Promise<PlanRefinement> {
+  private async refinePlan(
+    plan: Plan,
+    latestResult: string,
+    tools: Tool[]
+  ): Promise<PlanRefinement> {
     const llm = createLLM({
       model: this.config.plannerModel,
       provider: this.config.provider,
@@ -384,14 +397,14 @@ export class PlannerExecutor {
     });
 
     const response = await llm.invoke([
-      new SystemMessage('你是一个友好的助手。根据给定的任务描述，生成一条简短的中文提示消息（15字以内），告诉用户你正在做什么。语气要轻松友好，可以适当使用emoji。只返回提示消息本身，不要有其他内容。'),
+      new SystemMessage(
+        '你是一个友好的助手。根据给定的任务描述，生成一条简短的中文提示消息（15字以内），告诉用户你正在做什么。语气要轻松友好，可以适当使用emoji。只返回提示消息本身，不要有其他内容。'
+      ),
       new HumanMessage(`任务: ${stepDescription}`),
     ]);
 
     return (response.content as string).trim();
   }
-
-
 
   /** 格式化计划上下文，始终包含原始目标 */
   private formatPlanHistory(plan: Plan): string {

@@ -1,6 +1,6 @@
 /**
  * ToolRegistry - 工具注册中心
- * 
+ *
  * 提供集中化的方式来注册、检索和管理 ReAct agent 使用的工具。
  * 工具可以动态注入，并可转换为 LangChain 的 StructuredTool 格式。
  */
@@ -14,6 +14,7 @@ import type { Tool } from '../types/index.js';
  */
 function createLangChainTool(tool: Tool): StructuredTool {
   // 创建一个继承 StructuredTool 的动态类
+
   return new (class extends StructuredTool {
     name = tool.name;
     description = tool.description;
@@ -28,18 +29,18 @@ function createLangChainTool(tool: Tool): StructuredTool {
 
 /**
  * ToolRegistry - 管理工具的注册和检索
- * 
+ *
  * @example
  * ```typescript
  * const registry = new ToolRegistry();
- * 
+ *
  * registry.register({
  *   name: 'calculator',
  *   description: '执行基本算术运算',
  *   parameters: z.object({ expression: z.string() }),
  *   execute: async (args) => eval(args.expression).toString()
  * });
- * 
+ *
  * const tools = registry.toLangChainTools();
  * ```
  */

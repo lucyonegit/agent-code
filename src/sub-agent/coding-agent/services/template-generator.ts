@@ -7,11 +7,15 @@ import { execSync } from 'child_process';
 import { readFileSync, readdirSync, statSync, existsSync, mkdirSync } from 'fs';
 import { join, relative } from 'path';
 import { tmpdir } from 'os';
-import type { WebContainerTree, WebContainerFile, WebContainerDirectory } from '../utils/project-merger';
+import type {
+  WebContainerTree,
+  WebContainerFile,
+  WebContainerDirectory,
+} from '../utils/project-merger';
 
 export interface TemplateConfig {
   framework: 'react-ts' | 'react' | 'vue-ts' | 'vue';
-  cacheTTL?: number;  // 缓存有效期（毫秒），默认 24 小时
+  cacheTTL?: number; // 缓存有效期（毫秒），默认 24 小时
 }
 
 interface CacheEntry {
@@ -28,7 +32,9 @@ const DEFAULT_CACHE_TTL = 24 * 60 * 60 * 1000;
 /**
  * 获取或生成 Vite 模版
  */
-export async function getViteTemplate(config: TemplateConfig = { framework: 'react-ts' }): Promise<WebContainerTree> {
+export async function getViteTemplate(
+  config: TemplateConfig = { framework: 'react-ts' }
+): Promise<WebContainerTree> {
   const cacheKey = config.framework;
   const cacheTTL = config.cacheTTL ?? DEFAULT_CACHE_TTL;
 
@@ -81,7 +87,6 @@ async function generateViteTemplate(config: TemplateConfig): Promise<WebContaine
     injectDesignSystem(tree);
 
     return tree;
-
   } catch (error) {
     console.error('[TemplateGenerator] Failed to generate template:', error);
     // 返回内置的备用模版
@@ -114,15 +119,15 @@ function directoryToTree(dirPath: string, basePath: string = dirPath): WebContai
 
     if (stat.isDirectory()) {
       tree[entry] = {
-        directory: directoryToTree(fullPath, basePath)
+        directory: directoryToTree(fullPath, basePath),
       } as WebContainerDirectory;
     } else if (stat.isFile()) {
       try {
         const content = readFileSync(fullPath, 'utf-8');
         tree[entry] = {
           file: {
-            contents: content
-          }
+            contents: content,
+          },
         } as WebContainerFile;
       } catch {
         // 跳过无法读取的文件
@@ -162,29 +167,33 @@ function getFallbackTemplate(): WebContainerTree {
   return {
     'package.json': {
       file: {
-        contents: JSON.stringify({
-          name: 'vite-react-ts',
-          private: true,
-          version: '0.0.0',
-          type: 'module',
-          scripts: {
-            dev: 'vite',
-            build: 'tsc -b && vite build',
-            preview: 'vite preview'
+        contents: JSON.stringify(
+          {
+            name: 'vite-react-ts',
+            private: true,
+            version: '0.0.0',
+            type: 'module',
+            scripts: {
+              dev: 'vite',
+              build: 'tsc -b && vite build',
+              preview: 'vite preview',
+            },
+            dependencies: {
+              react: '^18.2.0',
+              'react-dom': '^18.2.0',
+            },
+            devDependencies: {
+              '@types/react': '^18.2.66',
+              '@types/react-dom': '^18.2.22',
+              '@vitejs/plugin-react': '^4.2.1',
+              typescript: '^5.2.2',
+              vite: '^5.2.0',
+            },
           },
-          dependencies: {
-            'react': '^18.2.0',
-            'react-dom': '^18.2.0'
-          },
-          devDependencies: {
-            '@types/react': '^18.2.66',
-            '@types/react-dom': '^18.2.22',
-            '@vitejs/plugin-react': '^4.2.1',
-            'typescript': '^5.2.2',
-            'vite': '^5.2.0'
-          }
-        }, null, 2)
-      }
+          null,
+          2
+        ),
+      },
     },
     'vite.config.ts': {
       file: {
@@ -194,27 +203,31 @@ import react from '@vitejs/plugin-react'
 export default defineConfig({
   plugins: [react()],
 })
-`
-      }
+`,
+      },
     },
     'tsconfig.json': {
       file: {
-        contents: JSON.stringify({
-          compilerOptions: {
-            target: 'ES2022',
-            useDefineForClassFields: true,
-            lib: ['ES2022', 'DOM', 'DOM.Iterable'],
-            module: 'ESNext',
-            skipLibCheck: true,
-            moduleResolution: 'bundler',
-            allowImportingTsExtensions: true,
-            noEmit: true,
-            jsx: 'react-jsx',
-            strict: true
+        contents: JSON.stringify(
+          {
+            compilerOptions: {
+              target: 'ES2022',
+              useDefineForClassFields: true,
+              lib: ['ES2022', 'DOM', 'DOM.Iterable'],
+              module: 'ESNext',
+              skipLibCheck: true,
+              moduleResolution: 'bundler',
+              allowImportingTsExtensions: true,
+              noEmit: true,
+              jsx: 'react-jsx',
+              strict: true,
+            },
+            include: ['src'],
           },
-          include: ['src']
-        }, null, 2)
-      }
+          null,
+          2
+        ),
+      },
     },
     'index.html': {
       file: {
@@ -230,10 +243,10 @@ export default defineConfig({
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>
-`
-      }
+`,
+      },
     },
-    'src': {
+    src: {
       directory: {
         'main.tsx': {
           file: {
@@ -247,8 +260,8 @@ createRoot(document.getElementById('root')!).render(
     <App />
   </StrictMode>,
 )
-`
-          }
+`,
+          },
         },
         'App.tsx': {
           file: {
@@ -263,21 +276,21 @@ function App() {
 }
 
 export default App
-`
-          }
+`,
+          },
         },
         'index.css': {
           file: {
-            contents: ENHANCED_INDEX_CSS
-          }
+            contents: ENHANCED_INDEX_CSS,
+          },
         },
         'App.css': {
           file: {
-            contents: ENHANCED_APP_CSS
-          }
-        }
-      }
-    }
+            contents: ENHANCED_APP_CSS,
+          },
+        },
+      },
+    },
   };
 }
 

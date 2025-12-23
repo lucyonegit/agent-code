@@ -46,22 +46,27 @@ export async function searchComponentDocs(
     });
 
     if (!response.ok) {
-      const errorData = await response.json().catch(() => ({})) as ErrorResponse;
-      throw new Error(`${response.status} ${response.statusText}${errorData.error ? ` - ${errorData.error}` : ''}`);
+      const errorData = (await response.json().catch(() => ({}))) as ErrorResponse;
+      throw new Error(
+        `${response.status} ${response.statusText}${errorData.error ? ` - ${errorData.error}` : ''}`
+      );
     }
 
-    const data = await response.json() as { answer: string; sources: RagQueryResponse['sources'] };
+    const data = (await response.json()) as {
+      answer: string;
+      sources: RagQueryResponse['sources'];
+    };
     return {
       answer: data.answer,
       sources: data.sources,
-      formatted: `查询: ${query}${componentName ? ` (组件: ${componentName})` : ''}${section ? ` [${section}]` : ''}\n回答: ${data.answer}\n来源数量: ${data.sources?.length || 0}`
+      formatted: `查询: ${query}${componentName ? ` (组件: ${componentName})` : ''}${section ? ` [${section}]` : ''}\n回答: ${data.answer}\n来源数量: ${data.sources?.length || 0}`,
     };
   } catch (error) {
     const errorMsg = `查询失败: ${error instanceof Error ? error.message : '未知错误'}`;
     return {
       answer: errorMsg,
       sources: [],
-      formatted: errorMsg
+      formatted: errorMsg,
     };
   }
 }
@@ -77,22 +82,27 @@ export async function getComponentList(): Promise<RagQueryResponse> {
     });
 
     if (!response.ok) {
-      const errorData = await response.json().catch(() => ({})) as ErrorResponse;
-      throw new Error(`${response.status} ${response.statusText}${errorData.error ? ` - ${errorData.error}` : ''}`);
+      const errorData = (await response.json().catch(() => ({}))) as ErrorResponse;
+      throw new Error(
+        `${response.status} ${response.statusText}${errorData.error ? ` - ${errorData.error}` : ''}`
+      );
     }
 
-    const data = await response.json() as { answer: string; sources: RagQueryResponse['sources'] };
+    const data = (await response.json()) as {
+      answer: string;
+      sources: RagQueryResponse['sources'];
+    };
     return {
       answer: data.answer,
       sources: data.sources,
-      formatted: `查询: 所有可用组件列表\n回答: ${data.answer}\n来源数量: ${data.sources?.length || 0}`
+      formatted: `查询: 所有可用组件列表\n回答: ${data.answer}\n来源数量: ${data.sources?.length || 0}`,
     };
   } catch (error) {
     const errorMsg = `获取失败: ${error instanceof Error ? error.message : '未知错误'}`;
     return {
       answer: errorMsg,
       sources: [],
-      formatted: errorMsg
+      formatted: errorMsg,
     };
   }
 }
@@ -107,11 +117,19 @@ export function createRagSearchTool(): Tool {
     parameters: z.object({
       query: z.string().describe('搜索关键字'),
       component_name: z.string().optional().describe('组件名称'),
-      section: z.enum(['API / Props', 'Usage Example', 'Description']).optional().describe('文档章节'),
+      section: z
+        .enum(['API / Props', 'Usage Example', 'Description'])
+        .optional()
+        .describe('文档章节'),
       limit: z.number().optional().describe('返回结果数量'),
     }),
-    execute: async (args) => {
-      const result = await searchComponentDocs(args.query, args.component_name, args.section, args.limit || 5);
+    execute: async args => {
+      const result = await searchComponentDocs(
+        args.query,
+        args.component_name,
+        args.section,
+        args.limit || 5
+      );
       return JSON.stringify(result, null, 2);
     },
   };
@@ -131,5 +149,3 @@ export function createGetComponentListTool(): Tool {
     },
   };
 }
-
-

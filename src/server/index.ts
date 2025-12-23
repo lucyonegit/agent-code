@@ -1,6 +1,6 @@
 /**
  * SSE Server - 通过 Server-Sent Events 暴露 ReActExecutor 和 PlannerExecutor 接口
- * 
+ *
  * 使用方法：
  * 1. 启动服务器: npx tsx src/server/index.ts
  * 2. 发送请求: POST /api/react 或 POST /api/planner
@@ -14,7 +14,10 @@ import { PlannerExecutor } from '../core/PlannerExecutor.js';
 import { CodingAgent } from '../sub-agent/coding-agent/index.js';
 import { type Tool, type ReActEvent, type Plan } from '../types/index.js';
 import type { CodingAgentEvent } from '../sub-agent/types/index.js';
-import { createRagSearchTool, createGetComponentListTool } from '../sub-agent/coding-agent/tools/rag.js';
+import {
+  createRagSearchTool,
+  createGetComponentListTool,
+} from '../sub-agent/coding-agent/tools/rag.js';
 import { z } from 'zod';
 
 // ============================================================================
@@ -36,7 +39,7 @@ const AVAILABLE_TOOLS: Record<string, Tool> = {
       location: z.string().describe('要获取天气的城市或位置'),
       unit: z.enum(['celsius', 'fahrenheit']).nullable().optional().describe('温度单位'),
     }),
-    execute: async (args) => {
+    execute: async args => {
       // 模拟天气 API
       return JSON.stringify({
         location: args.location,
@@ -53,7 +56,7 @@ const AVAILABLE_TOOLS: Record<string, Tool> = {
     parameters: z.object({
       expression: z.string().describe('数学表达式'),
     }),
-    execute: async (args) => {
+    execute: async args => {
       try {
         const sanitized = args.expression.replace(/[^0-9+\-*/().%\s]/g, '');
         const result = Function(`"use strict"; return (${sanitized})`)();
@@ -69,7 +72,7 @@ const AVAILABLE_TOOLS: Record<string, Tool> = {
     parameters: z.object({
       query: z.string().describe('搜索关键词'),
     }),
-    execute: async (args) => {
+    execute: async args => {
       // 模拟搜索 API
       return JSON.stringify([
         { title: `"${args.query}" 的搜索结果`, snippet: '这是一个示例搜索结果...' },
@@ -100,7 +103,7 @@ function setSSEHeaders(res: http.ServerResponse): void {
   res.writeHead(200, {
     'Content-Type': 'text/event-stream',
     'Cache-Control': 'no-cache',
-    'Connection': 'keep-alive',
+    Connection: 'keep-alive',
     'Access-Control-Allow-Origin': '*',
     'Access-Control-Allow-Methods': 'POST, GET, OPTIONS',
     'Access-Control-Allow-Headers': 'Content-Type',
@@ -117,7 +120,7 @@ function setSSEHeaders(res: http.ServerResponse): void {
 async function parseBody(req: http.IncomingMessage): Promise<any> {
   return new Promise((resolve, reject) => {
     let body = '';
-    req.on('data', chunk => body += chunk);
+    req.on('data', chunk => (body += chunk));
     req.on('end', () => {
       try {
         resolve(body ? JSON.parse(body) : {});
@@ -270,7 +273,9 @@ async function handleCodingRequest(
   try {
     const body = await parseBody(req);
     const { requirement, useRag = false, files } = body;
-    console.log(`[CodingRequest] Starting: "${requirement.slice(0, 50)}...", useRag: ${useRag}, files: ${files?.length || 0}`);
+    console.log(
+      `[CodingRequest] Starting: "${requirement.slice(0, 50)}...", useRag: ${useRag}, files: ${files?.length || 0}`
+    );
 
     if (!requirement) {
       sendSSE(res, 'error', { message: '缺少 requirement 参数' });
@@ -291,7 +296,9 @@ async function handleCodingRequest(
       requirement,
       files,
       onProgress: (event: CodingAgentEvent) => {
-        console.log(`[CodingRequest] Progress: ${event.type} ${event.type === 'phase_start' ? (event as any).phase : ''}`);
+        console.log(
+          `[CodingRequest] Progress: ${event.type} ${event.type === 'phase_start' ? (event as any).phase : ''}`
+        );
         // 直接发送事件，前端会根据类型处理
         sendSSE(res, event.type, event);
       },
@@ -321,7 +328,6 @@ async function handleCodingRequest(
 // 服务器创建
 // ============================================================================
 
-
 const server = http.createServer(async (req, res) => {
   const { method, url } = req;
 
@@ -349,12 +355,14 @@ const server = http.createServer(async (req, res) => {
       'Content-Type': 'application/json',
       'Access-Control-Allow-Origin': '*',
     });
-    res.end(JSON.stringify({
-      tools: Object.keys(AVAILABLE_TOOLS).map(name => ({
-        name,
-        description: AVAILABLE_TOOLS[name].description,
-      })),
-    }));
+    res.end(
+      JSON.stringify({
+        tools: Object.keys(AVAILABLE_TOOLS).map(name => ({
+          name,
+          description: AVAILABLE_TOOLS[name].description,
+        })),
+      })
+    );
     return;
   }
 
@@ -397,4 +405,3 @@ server.listen(PORT, () => {
   console.log('    -H "Content-Type: application/json" \\');
   console.log('    -d \'{"requirement": "实现一个用户登录页面"}\'');
 });
-

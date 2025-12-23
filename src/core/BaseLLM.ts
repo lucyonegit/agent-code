@@ -41,7 +41,7 @@ export function createLLM(config: LLMConfig): ChatOpenAI {
           baseURL: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
         },
       });
-    
+
     case 'openai-compatible':
       return new ChatOpenAI({
         ...baseConfig,
@@ -49,7 +49,7 @@ export function createLLM(config: LLMConfig): ChatOpenAI {
           baseURL: config.baseUrl,
         },
       });
-    
+
     case 'openai':
     default:
       return new ChatOpenAI(baseConfig);

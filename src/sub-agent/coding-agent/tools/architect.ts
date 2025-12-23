@@ -18,10 +18,14 @@ const ArchitectureFileSchema = z.object({
   description: z.string().describe('文件描述'),
   bdd_references: z.array(z.string()).describe('关联的 BDD 场景'),
   status: z.literal('pending_generation').describe('状态'),
-  dependencies: z.array(z.object({
-    path: z.string(),
-    import: z.array(z.string()),
-  })).describe('依赖'),
+  dependencies: z
+    .array(
+      z.object({
+        path: z.string(),
+        import: z.array(z.string()),
+      })
+    )
+    .describe('依赖'),
   rag_context_used: z.null(),
   content: z.null(),
 });
@@ -46,7 +50,7 @@ export function createArchitectTool(config: LLMConfig): Tool {
     parameters: z.object({
       bdd_scenarios: z.string().describe('BDD 场景 JSON 字符串'),
     }),
-    execute: async (args) => {
+    execute: async args => {
       const llm = createLLM({
         model: 'qwen3-coder-plus',
         provider: config.provider,
@@ -69,7 +73,7 @@ export function createArchitectTool(config: LLMConfig): Tool {
         new HumanMessage(`BDD 规范:\n${args.bdd_scenarios}\n\n请基于以上 BDD 规范设计项目架构。`),
       ]);
 
-      console.log("arc response:-----", JSON.stringify(response));
+      console.log('arc response:-----', JSON.stringify(response));
 
       if (response.tool_calls && response.tool_calls.length > 0) {
         const result = response.tool_calls[0].args;

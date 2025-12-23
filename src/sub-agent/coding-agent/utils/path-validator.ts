@@ -6,10 +6,10 @@
 import { dirname, resolve, relative, extname } from 'path';
 
 export interface ImportStatement {
-  raw: string;           // 原始 import 语句
-  from: string;          // import 路径
-  isRelative: boolean;   // 是否为相对路径
-  lineNumber: number;    // 行号
+  raw: string; // 原始 import 语句
+  from: string; // import 路径
+  isRelative: boolean; // 是否为相对路径
+  lineNumber: number; // 行号
 }
 
 export interface PathError {
@@ -119,10 +119,7 @@ export function calculateRelativePath(fromFilePath: string, toFilePath: string):
 /**
  * 查找目标文件（支持自动补全扩展名）
  */
-export function findTargetFile(
-  basePath: string,
-  existingFiles: Set<string>
-): string | null {
+export function findTargetFile(basePath: string, existingFiles: Set<string>): string | null {
   // 直接匹配
   if (existingFiles.has(basePath)) {
     return basePath;
@@ -138,11 +135,7 @@ export function findTargetFile(
   }
 
   // 尝试 index 文件
-  const indexPaths = [
-    `${basePath}/index.tsx`,
-    `${basePath}/index.ts`,
-    `${basePath}/index.js`,
-  ];
+  const indexPaths = [`${basePath}/index.tsx`, `${basePath}/index.ts`, `${basePath}/index.js`];
   for (const indexPath of indexPaths) {
     if (existingFiles.has(indexPath)) {
       return indexPath;
@@ -170,7 +163,11 @@ export function validateFileImports(
     }
 
     // 检查路径别名（应该被禁止）
-    if (imp.from.startsWith('@/') || imp.from.startsWith('~/') || imp.from.startsWith('@internal/')) {
+    if (
+      imp.from.startsWith('@/') ||
+      imp.from.startsWith('~/') ||
+      imp.from.startsWith('@internal/')
+    ) {
       errors.push({
         file: filePath,
         lineNumber: imp.lineNumber,
@@ -206,11 +203,17 @@ export function validateFileImports(
  * 查找相似路径（用于建议修复）
  */
 function findSimilarPath(targetPath: string, allFilePaths: Set<string>): string | null {
-  const targetName = targetPath.split('/').pop()?.replace(/\.(tsx?|jsx?|css)$/, '');
+  const targetName = targetPath
+    .split('/')
+    .pop()
+    ?.replace(/\.(tsx?|jsx?|css)$/, '');
   if (!targetName) return null;
 
   for (const filePath of allFilePaths) {
-    const fileName = filePath.split('/').pop()?.replace(/\.(tsx?|jsx?|css)$/, '');
+    const fileName = filePath
+      .split('/')
+      .pop()
+      ?.replace(/\.(tsx?|jsx?|css)$/, '');
     if (fileName === targetName) {
       return filePath;
     }
