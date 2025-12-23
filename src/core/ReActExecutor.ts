@@ -52,7 +52,15 @@ export const DEFAULT_REACT_PROMPT = `你是一个有帮助的 AI 助手，使用
 - 先思考，后行动
 - 思考过程写在回复内容中
 - 需要使用工具时调用相应的 function
-- **严禁数据总结**：如果之前的步骤产出了 JSON 格式的数据（见上下文中的 \`\`\`json 块），在后续调用需要该数据的工具时，必须**完整、原样传递**原始 JSON 字符串，严禁进行任何文字总结或格式修改。`;
+
+⚠️⚠️⚠️ 数据传递规则（极其重要，违反将导致失败）⚠️⚠️⚠️
+当一个工具的输出需要作为另一个工具的输入时：
+1. **绝对禁止**：总结、改写、重新组织或描述上一步的输出
+2. **必须做到**：将上一步工具返回的 JSON **完整复制粘贴**到下一步的参数中
+3. **具体示例**：
+   - 如果 decompose_to_bdd 返回: [{"feature_id": "xxx", "scenarios": [...]}]
+   - 那么 design_architecture 的 bdd_scenarios 参数必须是: [{"feature_id": "xxx", "scenarios": [...]}]
+   - 一个字符都不能改动！`;
 
 /**
  * 默认最终答案工具（导出供外部使用）
@@ -255,9 +263,10 @@ export class ReActExecutor {
               const tool = allTools.find(t => t.name === call.name);
               let observation: string;
               let success = true;
+              let tool_result: any;
 
               if (!tool) {
-                observation = `工具 "${call.name}" 未找到`;
+                observation = `工具 "${call.name}" 未找到，可用工具：${allTools.map(t => t.name).join(', ')} `;
                 success = false;
                 await this.emitEvent(onMessage, {
                   type: 'error',
@@ -266,9 +275,10 @@ export class ReActExecutor {
                 });
               } else {
                 try {
-                  observation = await tool.execute(call.args);
+                  tool_result = await tool.execute(call.args);
+                  observation = `[工具 ${call.name} 调用成功]\n工具执行结果：${tool_result}`;
                 } catch (error) {
-                  observation = `工具执行失败: ${error instanceof Error ? error.message : '未知错误'} `;
+                  observation = `工具 ${call.name} 执行失败: ${error instanceof Error ? error.message : '未知错误'} `;
                   success = false;
                   await this.emitEvent(onMessage, {
                     type: 'error',
@@ -283,7 +293,7 @@ export class ReActExecutor {
                 type: 'tool_call_result',
                 toolCallId,
                 toolName: call.name,
-                result: observation,
+                result: tool_result,
                 success,
                 duration: Date.now() - toolStartTime,
                 timestamp: Date.now(),
@@ -441,6 +451,7 @@ export class ReActExecutor {
         const tool = allTools.find(t => t.name === call.name);
         let observation: string;
         let success = true;
+        let tool_result: any;
 
         if (!tool) {
           observation = `工具 "${call.name}" 未找到。可用工具: ${allTools.map(t => t.name).join(', ')} `;
@@ -452,9 +463,10 @@ export class ReActExecutor {
           });
         } else {
           try {
-            observation = await tool.execute(call.args);
+            tool_result = await tool.execute(call.args);
+            observation = `[工具 ${call.name} 调用成功]\n工具执行结果：${tool_result}`;
           } catch (error) {
-            observation = `工具执行失败: ${error instanceof Error ? error.message : '未知错误'} `;
+            observation = `工具 ${call.name} 执行失败: ${error instanceof Error ? error.message : '未知错误'} `;
             success = false;
             await this.emitEvent(onMessage, {
               type: 'error',
@@ -469,7 +481,7 @@ export class ReActExecutor {
           type: 'tool_call_result',
           toolCallId,
           toolName: call.name,
-          result: observation,
+          result: tool_result,
           success,
           duration: Date.now() - toolStartTime,
           timestamp: Date.now(),

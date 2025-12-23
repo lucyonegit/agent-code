@@ -107,9 +107,38 @@ export class CodingAgent {
           }
         );
 
+        // 增量模式：构造符合 Schema 的占位 BDD 和 Architecture 结构
+        const incrementalBDD = [
+          {
+            feature_id: 'incremental_modification',
+            feature_title: '增量代码修改',
+            description: requirement,
+            scenarios: [
+              {
+                id: 'scenario_incremental',
+                title: '用户修改请求',
+                given: ['存在现有项目代码'],
+                when: ['用户请求修改'],
+                then: ['代码按需求更新'],
+              },
+            ],
+          },
+        ];
+
+        const incrementalArchitecture = files.map(f => ({
+          path: f.path,
+          type: 'component' as const,
+          description: `现有文件: ${f.path}`,
+          bdd_references: ['scenario_incremental'],
+          status: 'pending_generation' as const,
+          dependencies: [] as { path: string; import: string[] }[],
+          rag_context_used: null,
+          content: null,
+        }));
+
         const rawResult = await codeGenTool.execute({
-          bdd_scenarios: `User Modification Request: ${requirement}`,
-          architecture: `Existing Project Context: ${files.length} files provided.`,
+          bdd_scenarios: incrementalBDD,
+          architecture: incrementalArchitecture,
         });
 
         // 解析结果

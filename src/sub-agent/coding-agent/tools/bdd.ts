@@ -66,10 +66,15 @@ export function createBDDTool(config: LLMConfig): Tool {
         baseUrl: config.baseUrl,
       });
 
+      // LangChain tool 调用返回的 args 总是对象形式，需要用对象包装
+      const bddToolSchema = z.object({
+        features: BDDResultSchema.describe('BDD 功能场景数组'),
+      });
+
       const bddTool = {
         name: 'output_bdd',
         description: '输出 BDD 拆解结果',
-        schema: BDDResultSchema,
+        schema: bddToolSchema,
       };
 
       const llmWithTool = llm.bindTools([bddTool], {
@@ -87,7 +92,8 @@ export function createBDDTool(config: LLMConfig): Tool {
       ]);
 
       if (response.tool_calls && response.tool_calls.length > 0) {
-        const result = response.tool_calls[0].args;
+        const toolArgs = response.tool_calls[0].args as { features: unknown };
+        const result = toolArgs.features;
         return JSON.stringify(result, null, 2);
       }
 

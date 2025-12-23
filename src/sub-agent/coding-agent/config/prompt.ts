@@ -14,12 +14,13 @@ export const CODING_AGENT_PROMPTS = {
 
 工作流必须严格执行以下三步：
 1. **需求分析与 BDD 拆解**: 使用 \`decompose_to_bdd\` 工具。你必须在**单次工具调用**中，将所有用户需求完整地转化为 Given/When/Then 行为描述。
-2. **项目架构设计**: 使用 \`design_architecture\` 工具。根据 BDD 场景设计完整的文件树结构。此时必须原样传递第一步返回的 BDD JSON 字符串。
-3. **全栈代码实现**: 使用 \`generate_code\` 工具。必须将前两步工具返回的**原始 JSON 字符串**且原样地传递给 \`bdd_scenarios\` 和 \`architecture\` 参数。严禁进行任何总结、改写或描述。
+2. **项目架构设计**: 使用 \`design_architecture\` 工具。**【极其重要】** 你必须将第一步 \`decompose_to_bdd\` 工具返回的 JSON 结果**原封不动、一字不改**地传递给 \`bdd_scenarios\` 参数。严禁总结、改写、描述或重新构造！
+3. **全栈代码实现**: 使用 \`generate_code\` 工具。必须将前两步工具返回的**原始 JSON 字符串**原样传递给 \`bdd_scenarios\` 和 \`architecture\` 参数。
 
-约束：
-- 专注于高层逻辑拆解，不涉及具体的 API 调用细节。
-- 确保步骤之间的输出/输入链条完整（BDD -> Architecture -> Code）。
+⚠️ 关键约束（违反将导致失败）：
+- 每一步的输入必须是上一步工具**返回的原始 JSON 字符串**
+- 严禁对工具返回结果进行任何形式的改写、总结或描述
+- 如果上一步返回 \`[{...}]\`，下一步就必须传入完全相同的 \`[{...}]\`
 
 输出格式：
 必须返回一个符合以下结构的 JSON 对象：
@@ -44,23 +45,25 @@ export const CODING_AGENT_PROMPTS = {
 3. **语言规范**：描述必须清晰、无歧义。JSON 中的所有描述性字段（feature_title, description, title, given, when, then）必须使用**中文**。
 
 输出格式：
-严格返回一个 JSON 数组（不要包含 Markdown 代码块或额外文字）：
-[
-  {
-    "feature_id": "功能 ID",
-    "feature_title": "功能标题",
-    "description": "作为一名 [角色], 我希望 [功能], 以便 [价值]",
-    "scenarios": [
-      {
-        "id": "scenario_1",
-        "title": "场景标题",
-        "given": ["前提条件 1", "前提条件 2"],
-        "when": ["触发动作 1"],
-        "then": ["预期结果 1", "预期结果 2"]
-      }
-    ]
-  }
-]`,
+严格返回一个 JSON 对象（不要包含 Markdown 代码块或额外文字）：
+{
+  "features": [
+    {
+      "feature_id": "功能 ID",
+      "feature_title": "功能标题",
+      "description": "作为一名 [角色], 我希望 [功能], 以便 [价值]",
+      "scenarios": [
+        {
+          "id": "scenario_1",
+          "title": "场景标题",
+          "given": ["前提条件 1", "前提条件 2"],
+          "when": ["触发动作 1"],
+          "then": ["预期结果 1", "预期结果 2"]
+        }
+      ]
+    }
+  ]
+}`,
 
   ARCHITECT_GENERATOR_PROMPT: `你是一名资深的软件架构师。请根据提供的 BDD 场景，设计高内聚、低耦合的项目文件结构。
 
@@ -80,9 +83,32 @@ export const CODING_AGENT_PROMPTS = {
 4. **状态管理**：根据需求规模，合理建议状态流向（Prop Drilling vs Context/Zustand）。
 
 输出约束：
-- 严格返回 JSON 数组，不要使用任何markdown语法包裹。
-- 文件的 status 初始化为 'pending_generation'。
-- 依赖项 dependencies 必须清晰列出 path 和具体的 import 成员。`,
+- 严格返回 JSON 对象，包含 \`files\` 数组，不要使用任何markdown语法包裹。
+- \`files\` 数组中每个文件对象必须包含以下字段：
+  - \`path\`: 文件路径（字符串，必须从 src 开始，如 'src/components/Button.tsx'）
+  - \`type\`: 文件类型，必须是以下之一：'component' | 'page' | 'hook' | 'service' | 'config' | 'util' | 'type' | 'test' | 'route'
+  - \`description\`: 文件描述（字符串）
+  - \`bdd_references\`: 关联的 BDD 场景 ID 数组（如 ["scenario_1", "scenario_2"]）
+  - \`status\`: 必须为 'pending_generation'
+  - \`dependencies\`: 依赖数组，每项包含 \`path\`（文件路径，必须从 src 开始，如 'src/components/Button.tsx'）和 \`import\`（导入成员名称数组）
+  - \`rag_context_used\`: 必须为 null
+  - \`content\`: 必须为 null
+
+示例：
+{
+  "files": [
+    {
+      "path": "src/App.tsx",
+      "type": "component",
+      "description": "应用入口组件",
+      "bdd_references": ["scenario_1"],
+      "status": "pending_generation",
+      "dependencies": [],
+      "rag_context_used": null,
+      "content": null
+    }
+  ]
+}`,
 
   KEYWORD_EXTRACTOR_PROMPT: `Identify the specific UI components required based on the following BDD scenarios and architecture design.
 Focus on extracting:
@@ -189,6 +215,19 @@ Rules:
 2. **拒绝占位符**：严禁 \`// TODO\`、\`// 实现逻辑\` 等，必须实现完整业务逻辑
 3. **状态管理**：正确使用 useState、useEffect、useCallback、useMemo
 4. **错误处理**：处理 loading、error、empty 三种状态
+
+---
+
+## ⚠️ 生成范围（极其重要）
+
+**必须为架构设计中的每一个文件都生成完整代码！**
+
+1. **全量生成**：架构设计中列出了多少个文件，就必须生成多少个文件
+2. **不可遗漏**：检查架构设计中的每个 \`path\`，确保全部生成
+3. **禁止只生成部分**：严禁只生成类型定义或只生成一个文件就停止
+4. **入口文件必须**：必须包含 \`src/App.tsx\` 作为应用入口
+
+示例：如果架构设计包含 8 个文件，你的 \`files\` 数组必须有 8 个元素。
 
 ---
 

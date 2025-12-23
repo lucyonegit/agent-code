@@ -15,6 +15,14 @@ import { searchComponentDocs, getComponentList } from './rag';
 import { processProjectForWebContainer } from '../utils/project-merger';
 import { validateAllFiles, generateFixPrompt } from '../utils/path-validator';
 import { getViteTemplate } from '../services/template-generator';
+import {
+  BDDFeatureSchema,
+  BDDResultSchema,
+  ArchitectureFileSchema,
+  ArchitectureResultSchema,
+  type BDDResult,
+  type ArchitectureResult,
+} from './schemas';
 
 /**
  * 代码生成结果 Schema
@@ -459,53 +467,54 @@ export function createCodeGenTool(
 
   return {
     name: 'generate_code',
-    description: '基于 BDD 场景和架构设计生成项目代码（使用 LangGraph 工作流）',
+    description: `基于 BDD 场景和架构设计生成项目代码。
+
+【极其重要】两个参数都必须是前两步工具返回的完整数组数据，严禁任何形式的修改、总结或重写！
+
+bdd_scenarios 必须是 decompose_to_bdd 工具返回的原始数组。
+architecture 必须是 design_architecture 工具返回的原始数组。`,
     returnType: 'json',
+    // 使用强类型 Schema
     parameters: z.object({
-      bdd_scenarios: z.string().describe(`【严格要求】BDD 场景的 JSON 数据。
-- 必须是以 "[" 开头的 JSON 数组
-- 必须包含 decompose_to_bdd 工具返回的完整原始结果
-- 禁止传入自然语言描述或总结
-- 错误示例: "根据需求，BDD场景包括..."
-- 正确示例: [{"feature_id":"F1","feature_name":"用户登录",...}]`),
-      architecture: z.string().describe(`【严格要求】架构设计的 JSON 数据。
-- 必须是以 "[" 开头的 JSON 数组
-- 必须包含 design_architecture 工具返回的完整原始结果
-- 禁止传入自然语言描述或总结
-- 错误示例: "架构设计已完成，包括..."
-- 正确示例: [{"path":"src/App.tsx","type":"component",...}]`),
+      bdd_scenarios: z.array(BDDFeatureSchema).describe(
+        `【强类型约束】必须是 decompose_to_bdd 工具返回的完整 BDD 数组。
+每个元素必须包含：feature_id, feature_title, description, scenarios 字段。
+严禁自己编写、修改或简化！`
+      ),
+      architecture: z.array(ArchitectureFileSchema).describe(
+        `【强类型约束】必须是 design_architecture 工具返回的完整架构数组。
+每个元素必须包含：path, type, description, bdd_references, status, dependencies, rag_context_used, content 字段。
+严禁自己编写、修改或简化！`
+      ),
     }),
     execute: async args => {
-      // 严格验证输入格式
-      const validateJsonInput = (input: string, fieldName: string): string => {
-        const trimmed = input.trim();
-        // 检查是否以 [ 或 { 开头（JSON 格式）
-        if (!trimmed.startsWith('[') && !trimmed.startsWith('{')) {
-          console.error(
-            `[CodeGen] Invalid ${fieldName} input: not JSON format. Input starts with: "${trimmed.slice(0, 50)}..."`
-          );
-          throw new Error(
-            `参数 ${fieldName} 格式错误：必须传入 JSON 数据，不能传入自然语言描述。请使用上一步工具的原始返回结果。`
-          );
-        }
-        // 尝试解析验证是否为有效 JSON
-        try {
-          JSON.parse(trimmed);
-          return trimmed;
-        } catch (e) {
-          console.error(
-            `[CodeGen] Invalid ${fieldName} input: JSON parse failed. Input: "${trimmed.slice(0, 100)}..."`
-          );
-          throw new Error(`参数 ${fieldName} 不是有效的 JSON 格式。请检查传入的数据。`);
-        }
-      };
+      // 使用 Zod 进行强类型验证
+      const bddValidation = BDDResultSchema.safeParse(args.bdd_scenarios);
+      if (!bddValidation.success) {
+        const errors = bddValidation.error.issues
+          .map(issue => `[${issue.path.join('.')}] ${issue.message}`)
+          .join('; ');
+        throw new Error(
+          `bdd_scenarios 格式验证失败: ${errors}。请原样传递 decompose_to_bdd 工具的完整输出！`
+        );
+      }
 
-      const validatedBdd = validateJsonInput(args.bdd_scenarios, 'bdd_scenarios');
-      const validatedArch = validateJsonInput(args.architecture, 'architecture');
+      const archValidation = ArchitectureResultSchema.safeParse(args.architecture);
+      if (!archValidation.success) {
+        const errors = archValidation.error.issues
+          .map(issue => `[${issue.path.join('.')}] ${issue.message}`)
+          .join('; ');
+        throw new Error(
+          `architecture 格式验证失败: ${errors}。请原样传递 design_architecture 工具的完整输出！`
+        );
+      }
+
+      const bddData: BDDResult = bddValidation.data;
+      const archData: ArchitectureResult = archValidation.data;
 
       const result = await workflow.invoke({
-        bddScenarios: validatedBdd,
-        architecture: validatedArch,
+        bddScenarios: JSON.stringify(bddData, null, 2),
+        architecture: JSON.stringify(archData, null, 2),
         existingFiles: existingFiles || [],
         keywords: [],
         availableComponents: [],
@@ -517,9 +526,16 @@ export function createCodeGenTool(
 
       // 如果生成成功，进行项目合并
       try {
+        console.log('[CodeGen] Raw result.result:', result.result?.slice(0, 500));
         const parsedResult = JSON.parse(result.result);
+        console.log('[CodeGen] Parsed result keys:', Object.keys(parsedResult));
+        console.log('[CodeGen] parsedResult.files exists:', !!parsedResult.files);
+        console.log('[CodeGen] parsedResult.files type:', typeof parsedResult.files);
+        console.log('[CodeGen] parsedResult.files isArray:', Array.isArray(parsedResult.files));
+
         if (parsedResult.files && Array.isArray(parsedResult.files)) {
           console.log('Merging project with dynamic Vite template...');
+          console.log('[CodeGen] Files count:', parsedResult.files.length);
 
           // 使用动态生成的 Vite 模版
           const baseTemplate = await getViteTemplate({ framework: 'react-ts' });
@@ -534,6 +550,7 @@ export function createCodeGenTool(
         }
         // 如果没有 files 数组，返回空结构
         console.warn('[CodeGen] No files array in result, returning empty structure');
+        console.warn('[CodeGen] Full parsedResult:', JSON.stringify(parsedResult).slice(0, 500));
         return JSON.stringify({
           files: [],
           tree: {},

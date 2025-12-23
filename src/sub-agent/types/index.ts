@@ -51,7 +51,7 @@ export interface BDDFeature {
  */
 export interface ArchitectureFile {
   path: string;
-  type: 'component' | 'service' | 'config' | 'util' | 'test' | 'route';
+  type: 'component' | 'page' | 'hook' | 'service' | 'config' | 'util' | 'type' | 'test' | 'route';
   description: string;
   bdd_references: string[];
   status: 'pending_generation' | 'generated' | 'error';
