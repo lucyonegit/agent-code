@@ -55,9 +55,6 @@ export class CodingAgent {
    */
   async run(input: CodingAgentInput): Promise<CodingAgentResult> {
     const { requirement, files, onProgress } = input;
-    console.log(
-      `[CodingAgent] run() called with requirement: ${requirement.slice(0, 50)}... Files context: ${files?.length || 0} files`
-    );
 
     // 创建工具集
     const llmConfig = {
@@ -84,10 +81,8 @@ export class CodingAgent {
     };
 
     try {
-      console.log(`[CodingAgent] Generating greeting...`);
       // 发送友好的开场提示
       const greeting = await this.generateGreeting(requirement);
-      console.log(`[CodingAgent] Greeting generated: ${greeting}`);
       await this.emitEvent(onProgress, {
         type: 'normal_message',
         messageId: `greeting_${Date.now()}`,
@@ -97,10 +92,6 @@ export class CodingAgent {
 
       // 优化：如果是多轮修改模式（已有文件），跳过规划和架构阶段，直接生成代码
       if (files && files.length > 0) {
-        console.log(
-          '[CodingAgent] Existing files detected. Switching to Modification Mode (fast-path).'
-        );
-
         await this.emitEvent(onProgress, {
           type: 'phase_start',
           phase: 'codegen',
@@ -151,7 +142,6 @@ export class CodingAgent {
         }
       } else {
         // 正常全流程
-        console.log(`[CodingAgent] Starting PlannerExecutor...`);
         await this.plannerExecutor.run({
           goal: `${requirement}`,
           tools,

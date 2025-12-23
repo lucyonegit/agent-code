@@ -73,14 +73,12 @@ export function createArchitectTool(config: LLMConfig): Tool {
         new HumanMessage(`BDD 规范:\n${args.bdd_scenarios}\n\n请基于以上 BDD 规范设计项目架构。`),
       ]);
 
-      console.log('arc response:-----', JSON.stringify(response));
-
       if (response.tool_calls && response.tool_calls.length > 0) {
         const result = response.tool_calls[0].args;
         return JSON.stringify(result, null, 2);
       }
 
-      return JSON.stringify([]);
+      throw new Error('架构设计失败');
     },
   };
 }

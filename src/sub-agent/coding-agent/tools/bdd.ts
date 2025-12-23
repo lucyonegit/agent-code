@@ -91,7 +91,7 @@ export function createBDDTool(config: LLMConfig): Tool {
         return JSON.stringify(result, null, 2);
       }
 
-      return JSON.stringify([]);
+      throw new Error('BDD 拆解失败');
     },
   };
 }
