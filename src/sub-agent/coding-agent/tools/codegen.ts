@@ -377,13 +377,44 @@ export function createCodeGenTool(config: LLMConfig, existingFiles: GeneratedFil
     description: '基于 BDD 场景和架构设计生成项目代码（使用 LangGraph 工作流）',
     returnType: 'json',
     parameters: z.object({
-      bdd_scenarios: z.string().describe('BDD 场景原始 JSON 字符串（必须完整传递前一步的结果，禁止总结描述）'),
-      architecture: z.string().describe('架构设计原始 JSON 字符串（必须完整传递前一步的结果，禁止总结描述）'),
+      bdd_scenarios: z.string().describe(`【严格要求】BDD 场景的 JSON 数据。
+- 必须是以 "[" 开头的 JSON 数组
+- 必须包含 decompose_to_bdd 工具返回的完整原始结果
+- 禁止传入自然语言描述或总结
+- 错误示例: "根据需求，BDD场景包括..."
+- 正确示例: [{"feature_id":"F1","feature_name":"用户登录",...}]`),
+      architecture: z.string().describe(`【严格要求】架构设计的 JSON 数据。
+- 必须是以 "[" 开头的 JSON 数组
+- 必须包含 design_architecture 工具返回的完整原始结果
+- 禁止传入自然语言描述或总结
+- 错误示例: "架构设计已完成，包括..."
+- 正确示例: [{"path":"src/App.tsx","type":"component",...}]`),
     }),
     execute: async (args) => {
+      // 严格验证输入格式
+      const validateJsonInput = (input: string, fieldName: string): string => {
+        const trimmed = input.trim();
+        // 检查是否以 [ 或 { 开头（JSON 格式）
+        if (!trimmed.startsWith('[') && !trimmed.startsWith('{')) {
+          console.error(`[CodeGen] Invalid ${fieldName} input: not JSON format. Input starts with: "${trimmed.slice(0, 50)}..."`);
+          throw new Error(`参数 ${fieldName} 格式错误：必须传入 JSON 数据，不能传入自然语言描述。请使用上一步工具的原始返回结果。`);
+        }
+        // 尝试解析验证是否为有效 JSON
+        try {
+          JSON.parse(trimmed);
+          return trimmed;
+        } catch (e) {
+          console.error(`[CodeGen] Invalid ${fieldName} input: JSON parse failed. Input: "${trimmed.slice(0, 100)}..."`);
+          throw new Error(`参数 ${fieldName} 不是有效的 JSON 格式。请检查传入的数据。`);
+        }
+      };
+
+      const validatedBdd = validateJsonInput(args.bdd_scenarios, 'bdd_scenarios');
+      const validatedArch = validateJsonInput(args.architecture, 'architecture');
+
       const result = await workflow.invoke({
-        bddScenarios: args.bdd_scenarios,
-        architecture: args.architecture,
+        bddScenarios: validatedBdd,
+        architecture: validatedArch,
         existingFiles: existingFiles || [],
         keywords: [],
         availableComponents: [],
