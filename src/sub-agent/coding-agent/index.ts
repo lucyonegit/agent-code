@@ -1,16 +1,15 @@
 /**
  * CodingAgent - 编码智能体
  *
- * 基于 PlannerExecutor 的编码流水线：
+ * 固定工作流模式：
  * 用户需求 → BDD 拆解 → 架构设计 → 代码生成
+ *
+ * 通过程序化传递工具输出，避免 LLM 丢失或改写复杂 JSON 参数。
  */
 
-import { PlannerExecutor } from '../../core/PlannerExecutor';
-import { CODING_AGENT_PROMPTS } from './config/prompt';
 import { createBDDTool } from './tools/bdd';
 import { createArchitectTool } from './tools/architect';
 import { createCodeGenTool } from './tools/codegen';
-import type { Tool, ReActEvent } from '../../types/index';
 import type {
   CodingAgentConfig,
   CodingAgentInput,
@@ -20,13 +19,13 @@ import type {
   ArchitectureFile,
   CodeGenResult,
 } from '../types/index';
+import type { Plan } from '../../types/index';
 
 /**
- * CodingAgent - 基于 PlannerExecutor 的编码智能体
+ * CodingAgent - 基于固定工作流的编码智能体
  */
 export class CodingAgent {
   private config: CodingAgentConfig;
-  private plannerExecutor: PlannerExecutor;
 
   constructor(config: CodingAgentConfig) {
     this.config = {
@@ -37,17 +36,6 @@ export class CodingAgent {
       streaming: config.streaming ?? false,
       useRag: config.useRag ?? true,
     };
-
-    this.plannerExecutor = new PlannerExecutor({
-      plannerModel: config.model,
-      executorModel: config.model,
-      provider: config.provider,
-      apiKey: config.apiKey,
-      baseUrl: config.baseUrl,
-      maxIterationsPerStep: 15,
-      maxRePlanAttempts: 2,
-      systemPrompt: CODING_AGENT_PROMPTS.PLANNER_PROMPT,
-    });
   }
 
   /**
@@ -56,22 +44,13 @@ export class CodingAgent {
   async run(input: CodingAgentInput): Promise<CodingAgentResult> {
     const { requirement, files, onProgress } = input;
 
-    // 创建工具集
+    // 创建 LLM 配置
     const llmConfig = {
       model: this.config.model,
       provider: this.config.provider,
       apiKey: this.config.apiKey,
       baseUrl: this.config.baseUrl,
     };
-
-    const tools: Tool[] = [
-      createBDDTool(llmConfig),
-      createArchitectTool(llmConfig),
-      createCodeGenTool({ ...llmConfig, useRag: this.config.useRag }, files, async event => {
-        // 将工作流事件转发给前端（复用 tool_call / tool_call_result 格式）
-        await this.emitEvent(onProgress, event as unknown as CodingAgentEvent);
-      }),
-    ];
 
     // 存储中间结果
     const results = {
@@ -92,99 +71,10 @@ export class CodingAgent {
 
       // 优化：如果是多轮修改模式（已有文件），跳过规划和架构阶段，直接生成代码
       if (files && files.length > 0) {
-        await this.emitEvent(onProgress, {
-          type: 'phase_start',
-          phase: 'codegen',
-          message: '检测到项目上下文，正在进行增量修改...',
-          timestamp: Date.now(),
-        });
-
-        const codeGenTool = createCodeGenTool(
-          { ...llmConfig, useRag: this.config.useRag },
-          files,
-          async event => {
-            await this.emitEvent(onProgress, event as unknown as CodingAgentEvent);
-          }
-        );
-
-        // 增量模式：构造符合 Schema 的占位 BDD 和 Architecture 结构
-        const incrementalBDD = [
-          {
-            feature_id: 'incremental_modification',
-            feature_title: '增量代码修改',
-            description: requirement,
-            scenarios: [
-              {
-                id: 'scenario_incremental',
-                title: '用户修改请求',
-                given: ['存在现有项目代码'],
-                when: ['用户请求修改'],
-                then: ['代码按需求更新'],
-              },
-            ],
-          },
-        ];
-
-        const incrementalArchitecture = files.map(f => ({
-          path: f.path,
-          type: 'component' as const,
-          description: `现有文件: ${f.path}`,
-          bdd_references: ['scenario_incremental'],
-          status: 'pending_generation' as const,
-          dependencies: [] as { path: string; import: string[] }[],
-          rag_context_used: null,
-          content: null,
-        }));
-
-        const rawResult = await codeGenTool.execute({
-          bdd_scenarios: incrementalBDD,
-          architecture: incrementalArchitecture,
-        });
-
-        // 解析结果
-        try {
-          const json = JSON.parse(rawResult);
-          results.codeResult = {
-            files: json.files || [],
-            tree: json.tree,
-            summary: json.summary || '',
-          };
-
-          // 发送 code_generated 事件
-          await this.emitEvent(onProgress, {
-            type: 'code_generated',
-            files: results.codeResult!.files,
-            tree: results.codeResult!.tree,
-            summary: results.codeResult!.summary,
-            timestamp: Date.now(),
-          });
-
-          await this.emitEvent(onProgress, {
-            type: 'phase_complete',
-            phase: 'codegen',
-            data: json,
-            timestamp: Date.now(),
-          });
-        } catch (e) {
-          console.error('[CodingAgent] Error parsing fast-path result:', e);
-          throw new Error('代码生成结果解析失败');
-        }
+        await this.runIncrementalMode(requirement, files, llmConfig, results, onProgress);
       } else {
-        // 正常全流程
-        await this.plannerExecutor.run({
-          goal: `${requirement}`,
-          tools,
-          onMessage: async (event: ReActEvent) => {
-            await this.handleReActEvent(event, results, onProgress);
-          },
-          onPlanUpdate: async plan => {
-            await this.emitEvent(onProgress, {
-              type: 'plan_update',
-              plan,
-              timestamp: Date.now(),
-            });
-          },
-        });
+        // 正常全流程 - 使用固定工作流
+        await this.runFixedWorkflow(requirement, llmConfig, results, onProgress);
       }
 
       // 发送 complete 事件通知业务层
@@ -214,10 +104,17 @@ export class CodingAgent {
   }
 
   /**
-   * 处理 ReActEvent（包含事件转发和结果提取）
+   * 固定工作流：BDD → Architect → CodeGen
+   * 程序化传递工具输出，绕过 LLM 参数传递问题
    */
-  private async handleReActEvent(
-    event: ReActEvent,
+  private async runFixedWorkflow(
+    requirement: string,
+    llmConfig: {
+      model: string;
+      provider: CodingAgentConfig['provider'];
+      apiKey?: string;
+      baseUrl?: string;
+    },
     results: {
       bddFeatures: BDDFeature[];
       architecture: ArchitectureFile[];
@@ -225,82 +122,272 @@ export class CodingAgent {
     },
     onProgress?: CodingAgentInput['onProgress']
   ): Promise<void> {
-    switch (event.type) {
-      case 'thought':
-        // 转发新格式的思考事件
-        await this.emitEvent(onProgress, {
-          type: 'thought',
-          thoughtId: event.thoughtId,
-          chunk: event.chunk,
-          isComplete: event.isComplete,
-          timestamp: event.timestamp,
-        });
-        break;
-      case 'tool_call':
-        // 发送 phase_start 事件（针对特定工具）
-        if (event.toolName === 'decompose_to_bdd') {
-          await this.emitEvent(onProgress, {
-            type: 'phase_start',
-            phase: 'bdd',
-            message: '正在拆解 BDD 场景...',
-            timestamp: Date.now(),
-          });
-        } else if (event.toolName === 'design_architecture') {
-          await this.emitEvent(onProgress, {
-            type: 'phase_start',
-            phase: 'architect',
-            message: '正在设计项目架构...',
-            timestamp: Date.now(),
-          });
-        } else if (event.toolName === 'generate_code') {
-          await this.emitEvent(onProgress, {
-            type: 'phase_start',
-            phase: 'codegen',
-            message: '正在生成代码...',
-            timestamp: Date.now(),
-          });
-        }
-        // 转发 tool_call 事件（让前端可以显示 ToolCard）
-        await this.emitEvent(onProgress, {
-          type: 'tool_call',
-          toolCallId: event.toolCallId,
-          toolName: event.toolName,
-          args: event.args,
-          timestamp: event.timestamp,
-        });
-        break;
-      case 'tool_call_result':
-        // 转发 tool_call_result 事件（让前端可以更新 ToolCard 结果）
-        await this.emitEvent(onProgress, {
-          type: 'tool_call_result',
-          toolCallId: event.toolCallId,
-          toolName: event.toolName,
-          result: event.result,
-          success: event.success,
-          duration: event.duration,
-          timestamp: event.timestamp,
-        });
-        // 提取并存储结果
-        console.log(
-          `[CodingAgent] Tool call result for ${event.toolName}, result length: ${event.result.length}`
-        );
-        await this.extractAndStoreResults(event, results, onProgress);
-        break;
-      case 'error':
-        await this.emitEvent(onProgress, {
-          type: 'error',
-          message: event.message,
-          timestamp: Date.now(),
-        });
-        break;
+    // 推送固定的 Plan 给前端
+    const fixedPlan: Plan = {
+      goal: requirement,
+      steps: [
+        { id: 'step_1', description: 'BDD 场景拆解', status: 'pending' },
+        { id: 'step_2', description: '架构设计', status: 'pending' },
+        { id: 'step_3', description: '代码生成', status: 'pending' },
+      ],
+      reasoning: '固定三步编码工作流',
+      history: [],
+    };
+
+    await this.emitEvent(onProgress, {
+      type: 'plan_update',
+      plan: fixedPlan,
+      timestamp: Date.now(),
+    });
+
+    // 创建三个工具实例
+    const bddTool = createBDDTool(llmConfig);
+    const architectTool = createArchitectTool(llmConfig);
+    const codegenTool = createCodeGenTool(
+      { ...llmConfig, useRag: this.config.useRag },
+      undefined,
+      async event => {
+        await this.emitEvent(onProgress, event as unknown as CodingAgentEvent);
+      }
+    );
+
+    // ========== Step 1: BDD 拆解 ==========
+    fixedPlan.steps[0].status = 'in_progress';
+    await this.emitEvent(onProgress, {
+      type: 'plan_update',
+      plan: { ...fixedPlan },
+      timestamp: Date.now(),
+    });
+
+    await this.emitEvent(onProgress, {
+      type: 'phase_start',
+      phase: 'bdd',
+      message: '正在拆解 BDD 场景...',
+      timestamp: Date.now(),
+    });
+
+    const bddCallId = `bdd_${Date.now()}`;
+    await this.emitEvent(onProgress, {
+      type: 'tool_call',
+      toolCallId: bddCallId,
+      toolName: 'decompose_to_bdd',
+      args: { requirement },
+      timestamp: Date.now(),
+    });
+
+    const bddStartTime = Date.now();
+    const bddResultRaw = await bddTool.execute({ requirement });
+    const bddDuration = Date.now() - bddStartTime;
+
+    await this.emitEvent(onProgress, {
+      type: 'tool_call_result',
+      toolCallId: bddCallId,
+      toolName: 'decompose_to_bdd',
+      result: bddResultRaw,
+      success: true,
+      duration: bddDuration,
+      timestamp: Date.now(),
+    });
+
+    // 解析 BDD 结果
+    const bddFeatures: BDDFeature[] = JSON.parse(bddResultRaw);
+    results.bddFeatures = bddFeatures;
+
+    await this.emitEvent(onProgress, {
+      type: 'bdd_generated',
+      features: bddFeatures,
+      timestamp: Date.now(),
+    });
+
+    await this.emitEvent(onProgress, {
+      type: 'phase_complete',
+      phase: 'bdd',
+      data: bddFeatures,
+      timestamp: Date.now(),
+    });
+
+    fixedPlan.steps[0].status = 'done';
+    fixedPlan.steps[0].result = `生成 ${bddFeatures.length} 个功能场景`;
+    fixedPlan.history.push({
+      stepId: 'step_1',
+      result: bddResultRaw,
+      toolName: 'decompose_to_bdd',
+      resultType: 'json',
+      timestamp: new Date(),
+    });
+
+    // ========== Step 2: 架构设计 ==========
+    fixedPlan.steps[1].status = 'in_progress';
+    await this.emitEvent(onProgress, {
+      type: 'plan_update',
+      plan: { ...fixedPlan },
+      timestamp: Date.now(),
+    });
+
+    await this.emitEvent(onProgress, {
+      type: 'phase_start',
+      phase: 'architect',
+      message: '正在设计项目架构...',
+      timestamp: Date.now(),
+    });
+
+    const archCallId = `arch_${Date.now()}`;
+    await this.emitEvent(onProgress, {
+      type: 'tool_call',
+      toolCallId: archCallId,
+      toolName: 'design_architecture',
+      args: { bdd_scenarios: bddFeatures },
+      timestamp: Date.now(),
+    });
+
+    const archStartTime = Date.now();
+    // 直接程序化传递 BDD 结果
+    const archResultRaw = await architectTool.execute({ bdd_scenarios: bddFeatures });
+    const archDuration = Date.now() - archStartTime;
+
+    await this.emitEvent(onProgress, {
+      type: 'tool_call_result',
+      toolCallId: archCallId,
+      toolName: 'design_architecture',
+      result: archResultRaw,
+      success: true,
+      duration: archDuration,
+      timestamp: Date.now(),
+    });
+
+    // 解析架构结果
+    const architecture: ArchitectureFile[] = JSON.parse(archResultRaw);
+    results.architecture = architecture;
+
+    await this.emitEvent(onProgress, {
+      type: 'architecture_generated',
+      files: architecture,
+      timestamp: Date.now(),
+    });
+
+    await this.emitEvent(onProgress, {
+      type: 'phase_complete',
+      phase: 'architect',
+      data: architecture,
+      timestamp: Date.now(),
+    });
+
+    fixedPlan.steps[1].status = 'done';
+    fixedPlan.steps[1].result = `设计 ${architecture.length} 个文件`;
+    fixedPlan.history.push({
+      stepId: 'step_2',
+      result: archResultRaw,
+      toolName: 'design_architecture',
+      resultType: 'json',
+      timestamp: new Date(),
+    });
+
+    // ========== Step 3: 代码生成 ==========
+    fixedPlan.steps[2].status = 'in_progress';
+    await this.emitEvent(onProgress, {
+      type: 'plan_update',
+      plan: { ...fixedPlan },
+      timestamp: Date.now(),
+    });
+
+    await this.emitEvent(onProgress, {
+      type: 'phase_start',
+      phase: 'codegen',
+      message: '正在生成代码...',
+      timestamp: Date.now(),
+    });
+
+    const codegenCallId = `codegen_${Date.now()}`;
+    await this.emitEvent(onProgress, {
+      type: 'tool_call',
+      toolCallId: codegenCallId,
+      toolName: 'generate_code',
+      args: { bdd_scenarios: bddFeatures, architecture },
+      timestamp: Date.now(),
+    });
+
+    const codegenStartTime = Date.now();
+    // 直接程序化传递 BDD 和架构结果
+    let codegenResultRaw: string;
+    try {
+      codegenResultRaw = await codegenTool.execute({
+        bdd_scenarios: bddFeatures,
+        architecture,
+      });
+    } catch (codegenError) {
+      const errorMsg = codegenError instanceof Error ? codegenError.message : String(codegenError);
+      console.error('[CodingAgent] CodeGen tool execution failed:', errorMsg);
+      console.error(
+        '[CodingAgent] BDD count:',
+        bddFeatures.length,
+        'Arch count:',
+        architecture.length
+      );
+      throw new Error(`代码生成失败: ${errorMsg}`);
     }
+    const codegenDuration = Date.now() - codegenStartTime;
+
+    await this.emitEvent(onProgress, {
+      type: 'tool_call_result',
+      toolCallId: codegenCallId,
+      toolName: 'generate_code',
+      result: codegenResultRaw,
+      success: true,
+      duration: codegenDuration,
+      timestamp: Date.now(),
+    });
+
+    // 解析代码生成结果
+    const codegenResult = JSON.parse(codegenResultRaw);
+    results.codeResult = {
+      files: codegenResult.files || [],
+      tree: codegenResult.tree,
+      summary: codegenResult.summary || '',
+    };
+
+    // 验证 tree 包含完整项目结构（包括 package.json 等模版文件）
+    const treeKeys = Object.keys(codegenResult.tree || {});
+    console.log('[CodingAgent] Tree contains:', treeKeys.join(', '));
+    console.log('[CodingAgent] Has package.json:', 'package.json' in (codegenResult.tree || {}));
+
+    await this.emitEvent(onProgress, {
+      type: 'code_generated',
+      files: results.codeResult.files,
+      tree: results.codeResult.tree,
+      summary: results.codeResult.summary,
+      timestamp: Date.now(),
+    });
+
+    await this.emitEvent(onProgress, {
+      type: 'phase_complete',
+      phase: 'codegen',
+      data: codegenResult,
+      timestamp: Date.now(),
+    });
+
+    fixedPlan.steps[2].status = 'done';
+    fixedPlan.steps[2].result = `生成 ${results.codeResult.files.length} 个代码文件`;
+
+    // 发送最终的 plan_update
+    await this.emitEvent(onProgress, {
+      type: 'plan_update',
+      plan: { ...fixedPlan },
+      timestamp: Date.now(),
+    });
   }
 
   /**
-   * 从 tool_call_result 事件中提取结果并发送专用事件
+   * 增量修改模式：当有现有文件时，跳过 BDD 和架构，直接生成代码
    */
-  private async extractAndStoreResults(
-    event: ReActEvent & { type: 'tool_call_result' },
+  private async runIncrementalMode(
+    requirement: string,
+    files: NonNullable<CodingAgentInput['files']>,
+    llmConfig: {
+      model: string;
+      provider: CodingAgentConfig['provider'];
+      apiKey?: string;
+      baseUrl?: string;
+    },
     results: {
       bddFeatures: BDDFeature[];
       architecture: ArchitectureFile[];
@@ -308,81 +395,82 @@ export class CodingAgent {
     },
     onProgress?: CodingAgentInput['onProgress']
   ): Promise<void> {
+    await this.emitEvent(onProgress, {
+      type: 'phase_start',
+      phase: 'codegen',
+      message: '检测到项目上下文，正在进行增量修改...',
+      timestamp: Date.now(),
+    });
+
+    const codeGenTool = createCodeGenTool(
+      { ...llmConfig, useRag: this.config.useRag },
+      files,
+      async event => {
+        await this.emitEvent(onProgress, event as unknown as CodingAgentEvent);
+      }
+    );
+
+    // 增量模式：构造符合 Schema 的占位 BDD 和 Architecture 结构
+    const incrementalBDD = [
+      {
+        feature_id: 'incremental_modification',
+        feature_title: '增量代码修改',
+        description: requirement,
+        scenarios: [
+          {
+            id: 'scenario_incremental',
+            title: '用户修改请求',
+            given: ['存在现有项目代码'],
+            when: ['用户请求修改'],
+            then: ['代码按需求更新'],
+          },
+        ],
+      },
+    ];
+
+    const incrementalArchitecture = files.map(f => ({
+      path: f.path,
+      type: 'component' as const,
+      description: `现有文件: ${f.path}`,
+      bdd_references: ['scenario_incremental'],
+      status: 'pending_generation' as const,
+      dependencies: [] as { path: string; import: string[] }[],
+      rag_context_used: null,
+      content: null,
+    }));
+
+    const rawResult = await codeGenTool.execute({
+      bdd_scenarios: incrementalBDD,
+      architecture: incrementalArchitecture,
+    });
+
+    // 解析结果
     try {
-      const json = JSON.parse(event.result);
-      console.log(`[CodingAgent] Parsed JSON keys: ${Object.keys(json).join(', ')}`);
+      const json = JSON.parse(rawResult);
+      results.codeResult = {
+        files: json.files || [],
+        tree: json.tree,
+        summary: json.summary || '',
+      };
 
-      // 检测 BDD 结果
-      if (Array.isArray(json) && json[0]?.feature_id) {
-        console.log(
-          `[CodingAgent] BDD features detected: ${json.length} features. Previous count: ${results.bddFeatures.length}`
-        );
-        results.bddFeatures = json;
-        // 发送专用的 bdd_generated 事件
-        await this.emitEvent(onProgress, {
-          type: 'bdd_generated',
-          features: json,
-          timestamp: Date.now(),
-        });
-        // 同时发送 phase_complete 事件以保持向后兼容
-        await this.emitEvent(onProgress, {
-          type: 'phase_complete',
-          phase: 'bdd',
-          data: json,
-          timestamp: Date.now(),
-        });
-      }
+      // 发送 code_generated 事件
+      await this.emitEvent(onProgress, {
+        type: 'code_generated',
+        files: results.codeResult!.files,
+        tree: results.codeResult!.tree,
+        summary: results.codeResult!.summary,
+        timestamp: Date.now(),
+      });
 
-      // 检测架构结果
-      if (Array.isArray(json) && json[0]?.path && json[0]?.type) {
-        console.log(
-          `[CodingAgent] Architecture detected: ${json.length} files. Previous count: ${results.architecture.length}`
-        );
-        results.architecture = json;
-        // 发送专用的 architecture_generated 事件
-        await this.emitEvent(onProgress, {
-          type: 'architecture_generated',
-          files: json,
-          timestamp: Date.now(),
-        });
-        // 同时发送 phase_complete 事件以保持向后兼容
-        await this.emitEvent(onProgress, {
-          type: 'phase_complete',
-          phase: 'architect',
-          data: json,
-          timestamp: Date.now(),
-        });
-      }
-
-      // 检测代码生成结果
-      if (json.files && Array.isArray(json.files)) {
-        console.log(
-          `[CodingAgent] Code generation results detected: ${json.files.length} files. Has tree: ${!!json.tree}`
-        );
-        results.codeResult = json;
-        // 发送专用的 code_generated 事件
-        await this.emitEvent(onProgress, {
-          type: 'code_generated',
-          files: json.files,
-          tree: json.tree, // 包含合并后的文件树
-          summary: json.summary || '',
-          timestamp: Date.now(),
-        });
-        // 同时发送 phase_complete 事件以保持向后兼容
-        await this.emitEvent(onProgress, {
-          type: 'phase_complete',
-          phase: 'codegen',
-          data: json,
-          timestamp: Date.now(),
-        });
-      }
+      await this.emitEvent(onProgress, {
+        type: 'phase_complete',
+        phase: 'codegen',
+        data: json,
+        timestamp: Date.now(),
+      });
     } catch (e) {
-      console.error(
-        '[CodingAgent] extractAndStoreResults parse error:',
-        e,
-        'Raw result:',
-        event.result?.slice(0, 200)
-      );
+      console.error('[CodingAgent] Error parsing incremental result:', e);
+      throw new Error('代码生成结果解析失败');
     }
   }
 

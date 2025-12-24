@@ -92,7 +92,17 @@ scenarios 数组中每个场景必须包含：id, title, given, when, then 字�
 
       if (response.tool_calls && response.tool_calls.length > 0) {
         const toolArgs = response.tool_calls[0].args as { files: unknown };
-        const result = toolArgs.files;
+        let result = toolArgs.files;
+
+        // 防止 LLM 返回字符串而非对象（某些模型会这样）
+        if (typeof result === 'string') {
+          console.warn('[ArchitectTool] LLM returned files as string, parsing...');
+          try {
+            result = JSON.parse(result);
+          } catch {
+            throw new Error(`架构结果解析失败: LLM 返回了无效的 JSON 字符串`);
+          }
+        }
 
         // 验证架构是否符合规范
         const archValidationResult = validateArchitecture(result);

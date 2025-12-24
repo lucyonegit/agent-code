@@ -93,7 +93,18 @@ export function createBDDTool(config: LLMConfig): Tool {
 
       if (response.tool_calls && response.tool_calls.length > 0) {
         const toolArgs = response.tool_calls[0].args as { features: unknown };
-        const result = toolArgs.features;
+        let result = toolArgs.features;
+
+        // 防止 LLM 返回字符串而非对象（某些模型会这样）
+        if (typeof result === 'string') {
+          console.warn('[BDDTool] LLM returned features as string, parsing...');
+          try {
+            result = JSON.parse(result);
+          } catch {
+            throw new Error(`BDD 结果解析失败: LLM 返回了无效的 JSON 字符串`);
+          }
+        }
+
         return JSON.stringify(result, null, 2);
       }
 
